@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SmartBreath Phase 5 ECS Fargate WebSocket structure; deployment intentionally deferred.
+Parameters:
+  ImageUri:
+    Type: String
+    Description: Approved container image URI supplied during deployment.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  WebSocketSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+Resources:
+  WebSocketCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: smartbreath-websocket
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+  WebSocketTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+  WebSocketTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt WebSocketTaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: websocket
+          Image: !Ref ImageUri
+          Essential: true
+          Environment:
+            - Name: AUTH_MODE
+              Value: production
+          PortMappings:
+            - ContainerPort: 8080
+          HealthCheck:
+            Command: [CMD-SHELL, wget -qO- http://localhost:8080/health || exit 1]
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: /smartbreath/websocket
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+  WebSocketService:
+    Type: AWS::ECS::Service
+    DependsOn: WebSocketLogGroup
+    Properties:
+      Cluster: !Ref WebSocketCluster
+      DesiredCount: 1
+      LaunchType: FARGATE
+      TaskDefinition: !Ref WebSocketTaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups: [!Ref WebSocketSecurityGroupId]
+          Subnets: !Ref PrivateSubnetIds
+  WebSocketLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: /smartbreath/websocket
+      RetentionInDays: 30

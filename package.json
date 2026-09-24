@@ -1,0 +1,29 @@
+{
+  "name": "smartbreath",
+  "version": "1.0.0",
+  "description": "",
+  "main": "backend/server.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "node --watch backend/server.js",
+    "test": "node --test --test-reporter=spec"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nikhithareddylakkireddy/SmartBreath.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/nikhithareddylakkireddy/SmartBreath/issues"
+  },
+  "homepage": "https://github.com/nikhithareddylakkireddy/SmartBreath#readme",
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

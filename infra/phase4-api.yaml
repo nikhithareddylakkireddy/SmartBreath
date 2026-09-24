@@ -1,0 +1,32 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Phase 4 API route contract; deployment is intentionally separate from the local MVP.
+# API Gateway routes are protected by the Cognito authorizer defined in template.yaml.
+# School tenant authorization remains mandatory in the application layer.
+Routes:
+  - method: GET
+    path: /api/health
+    authorization: public
+  - method: GET
+    path: /api/schools/{schoolId}/readings
+    authorization: Cognito JWT + tenant match
+  - method: GET
+    path: /api/schools/{schoolId}/predictions
+    authorization: Cognito JWT + tenant match
+  - method: GET
+    path: /api/schools/{schoolId}/alerts
+    authorization: Cognito JWT + tenant match
+  - method: GET
+    path: /api/schools/{schoolId}/audit
+    authorization: Cognito JWT + tenant match
+  - method: POST
+    path: /api/schools/{schoolId}/alerts/{alertId}/acknowledge
+    authorization: Cognito JWT + staff/administrator + tenant match
+  - method: GET
+    path: /api/schools/{schoolId}/contacts
+    authorization: Cognito JWT + tenant match
+  - method: POST
+    path: /api/schools/{schoolId}/contacts
+    authorization: Cognito JWT + administrator + tenant match
+  - method: POST
+    path: /api/schools/{schoolId}/demo/severe-pm25
+    authorization: Cognito JWT + staff/administrator + tenant match

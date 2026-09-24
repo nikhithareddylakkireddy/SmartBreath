@@ -1,0 +1,7 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Phase 5 web-delivery architecture notes; no live distribution or DNS records are created.
+Metadata:
+  AmplifyHosting: Next.js app should be connected through an approved Amplify project.
+  CloudFront: Use an HTTPS distribution with the approved frontend/API origins; cache immutable static assets and avoid caching authenticated API responses.
+  Route53: The SmartBreath domain should alias to the approved CloudFront distribution after DNS review.
+  DeploymentStatus: Documentation only. No CloudFront distribution, Amplify app, hosted zone, or DNS record is created by this file.

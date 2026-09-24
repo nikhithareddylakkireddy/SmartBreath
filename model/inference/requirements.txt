@@ -1,0 +1,3 @@
+# SageMaker inference image dependencies.
+# No local installation is required for Phase 3 tests.
+numpy

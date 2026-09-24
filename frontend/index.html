@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SmartBreath</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">AI Air-Safety Early Warning</p>
+          <h1>SmartBreath</h1>
+        </div>
+        <button class="primary-button">Export report</button>
+      </header>
+
+      <main class="dashboard">
+        <section class="summary-grid">
+          <article class="card stat-card">
+            <label>Total schools</label>
+            <strong id="total-schools">0</strong>
+          </article>
+          <article class="card stat-card accent">
+            <label>Average AQI</label>
+            <strong id="average-aqi">0</strong>
+          </article>
+          <article class="card stat-card warning">
+            <label>Active alerts</label>
+            <strong id="active-alerts">0</strong>
+          </article>
+          <article class="card stat-card danger">
+            <label>Critical schools</label>
+            <strong id="critical-schools">0</strong>
+          </article>
+        </section>
+
+        <section class="content-grid">
+          <article class="card panel">
+            <div class="panel-header">
+              <h2>School hotspot overview</h2>
+              <span class="pill">Live</span>
+            </div>
+            <div id="school-list" class="school-list"></div>
+          </article>
+
+          <aside class="card panel">
+            <div class="panel-header">
+              <h2>AI response plan</h2>
+              <span class="pill neutral">Recommended</span>
+            </div>
+            <ul id="recommendations" class="recommendation-list"></ul>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

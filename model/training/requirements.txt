@@ -1,0 +1,6 @@
+# SageMaker training image dependencies.
+# Local Phase 3 tests use the dependency-free JavaScript implementation.
+# Future SageMaker packaging may add a Python estimator implementation.
+numpy
+pandas
+scikit-learn

@@ -1,0 +1,117 @@
+{
+  "Comment": "SmartBreath Phase 3-compatible ingestion, persistence, feature, prediction, risk, and audit workflow",
+  "StartAt": "IngestAndValidate",
+  "States": {
+    "IngestAndValidate": {
+      "Type": "Task",
+      "Resource": "${IngestionFunctionArn}",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ValidationFailed"
+        }
+      ],
+      "Next": "PersistRawAndReading"
+    },
+    "PersistRawAndReading": {
+      "Type": "Task",
+      "Resource": "${PersistenceFunctionArn}",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 3,
+          "MaxAttempts": 4,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PersistenceFailed"
+        }
+      ],
+      "Next": "PrepareFeatures"
+    },
+    "PrepareFeatures": {
+      "Type": "Pass",
+      "Comment": "Phase 3 local feature contract; replace with a feature-preparation Lambda before AWS execution.",
+      "Result": {
+        "featurePreparation": "local-adapter-contract"
+      },
+      "ResultPath": "$.phase3",
+      "Next": "GeneratePrediction"
+    },
+    "GeneratePrediction": {
+      "Type": "Pass",
+      "Comment": "Phase 3 SageMaker adapter contract; no endpoint invocation is configured yet.",
+      "Result": {
+        "prediction": "local-inference-adapter-contract"
+      },
+      "ResultPath": "$.phase3",
+      "Next": "EvaluateRisk"
+    },
+    "EvaluateRisk": {
+      "Type": "Pass",
+      "Comment": "Deterministic Phase 1 policy evaluation consumes the future prediction.",
+      "Result": {
+        "riskEvaluation": "deterministic-policy-contract"
+      },
+      "ResultPath": "$.phase3",
+      "Next": "PersistPredictionAndRisk"
+    },
+    "PersistPredictionAndRisk": {
+      "Type": "Pass",
+      "Comment": "Phase 3 DynamoDB prediction/risk record mapping contract.",
+      "Result": {
+        "predictionRiskPersistence": "dynamodb-mapping-contract"
+      },
+      "ResultPath": "$.phase3",
+      "Next": "WriteAudit"
+    },
+    "WriteAudit": {
+      "Type": "Task",
+      "Resource": "${AuditFunctionArn}",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "AuditFailed"
+        }
+      ],
+      "Next": "Succeeded"
+    },
+    "ValidationFailed": {
+      "Type": "Fail",
+      "Error": "SensorReadingValidationFailed",
+      "Cause": "The normalized sensor reading did not satisfy the Phase 1 contract."
+    },
+    "PersistenceFailed": {
+      "Type": "Fail",
+      "Error": "PersistenceFailed",
+      "Cause": "Raw S3 or DynamoDB persistence failed after retry."
+    },
+    "AuditFailed": {
+      "Type": "Fail",
+      "Error": "AuditWriteFailed",
+      "Cause": "The reading was persisted but its audit record could not be written."
+    },
+    "Succeeded": {
+      "Type": "Succeed"
+    }
+  }
+}

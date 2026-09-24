@@ -1,0 +1,414 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: SmartBreath Phase 2 ingestion and persistence backbone
+
+Parameters:
+  ScheduleExpression:
+    Type: String
+    Default: rate(15 minutes)
+    Description: Development-friendly ingestion schedule; do not use for high-frequency telemetry.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC for Aurora configuration storage.
+  DatabaseSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnet IDs for Aurora.
+  DatabaseSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group allowing only approved application access to Aurora.
+  AllowedOrigin:
+    Type: String
+    Default: http://localhost:3001
+    Description: Explicit frontend origin; never use a wildcard in production.
+  NotificationKmsKeyArn:
+    Type: String
+    Default: alias/aws/sqs
+    Description: KMS key alias or ARN for notification queues.
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    MemorySize: 256
+    Timeout: 30
+    Tracing: Active
+    Environment:
+      Variables:
+        LOG_LEVEL: INFO
+
+Resources:
+  RawReadingsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+
+  ReadingsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+
+  AuroraSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for SmartBreath relational configuration
+      SubnetIds: !Ref DatabaseSubnetIds
+
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Engine: aurora-postgresql
+      DatabaseName: smartbreath
+      MasterUsername: smartbreath_admin
+      ManageMasterUserPassword: true
+      DBSubnetGroupName: !Ref AuroraSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroupId
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 2
+      StorageEncrypted: true
+
+  AuroraInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: aurora-postgresql
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: db.serverless
+
+  IngestionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ..
+      Handler: lambda/ingestion/index.handler
+      Policies:
+        - AWSLambdaBasicExecutionRole
+      LoggingConfig:
+        LogGroup: !Ref IngestionLogGroup
+
+  PersistenceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ..
+      Handler: lambda/persistence/index.handler
+      Environment:
+        Variables:
+          RAW_BUCKET_NAME: !Ref RawReadingsBucket
+          READINGS_TABLE_NAME: !Ref ReadingsTable
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub '${RawReadingsBucket.Arn}/raw-readings/*'
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt ReadingsTable.Arn
+      LoggingConfig:
+        LogGroup: !Ref PersistenceLogGroup
+
+  AuditFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ..
+      Handler: lambda/audit/index.handler
+      Environment:
+        Variables:
+          READINGS_TABLE_NAME: !Ref ReadingsTable
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt ReadingsTable.Arn
+      LoggingConfig:
+        LogGroup: !Ref AuditLogGroup
+
+  IngestionStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine.asl.json
+      DefinitionSubstitutions:
+        IngestionFunctionArn: !GetAtt IngestionFunction.Arn
+        PersistenceFunctionArn: !GetAtt PersistenceFunction.Arn
+        AuditFunctionArn: !GetAtt AuditFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref IngestionFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PersistenceFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref AuditFunction
+      Logging:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+      Tracing:
+        Enabled: true
+
+  IngestionSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Development schedule for the SmartBreath ingestion workflow
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !Ref IngestionStateMachine
+          Id: SmartBreathIngestionStateMachine
+          RoleArn: !GetAtt EventBridgeStepFunctionsRole.Arn
+          Input: '{"source":"eventbridge","mode":"scheduled"}'
+
+  EventBridgeStepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartIngestionStateMachine
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref IngestionStateMachine
+
+  IngestionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      RetentionInDays: 30
+
+  PersistenceLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      RetentionInDays: 30
+
+  AuditLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      RetentionInDays: 30
+
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      RetentionInDays: 30
+
+  SmartBreathUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-users'
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      UserPoolTags:
+        Purpose: SmartBreath school tenant identity
+      Schema:
+        - Name: schoolId
+          AttributeDataType: String
+          Mutable: false
+          Required: false
+
+  SmartBreathUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref SmartBreathUserPool
+      GenerateSecret: false
+
+  SchoolAdministratorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: school-administrator
+      UserPoolId: !Ref SmartBreathUserPool
+
+  SchoolStaffGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: school-staff
+      UserPoolId: !Ref SmartBreathUserPool
+
+  ParentGuardianGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: parent-guardian
+      UserPoolId: !Ref SmartBreathUserPool
+
+  NotificationDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+      KmsMasterKeyId: !Ref NotificationKmsKeyArn
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Tags:
+        - Key: smartbreath-purpose
+          Value: notification-provider
+
+  NotificationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: !Ref NotificationKmsKeyArn
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NotificationDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  ProtectedApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: v1
+      Cors:
+        AllowOrigin: !Sub "'${AllowedOrigin}'"
+        AllowHeaders: "'Authorization,Content-Type'"
+      Auth:
+        Authorizers:
+          CognitoAuthorizer:
+            UserPool:
+              - !Ref SmartBreathUserPool
+            Identity:
+              Header: Authorization
+        DefaultAuthorizer: CognitoAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+
+  NotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ..
+      Handler: lambda/notifications/index.handler
+      Timeout: 60
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - SQSPollerPolicy:
+            QueueName: !GetAtt NotificationQueue.QueueName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Ref NotificationTopic
+      Events:
+        NotificationQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificationQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+      LoggingConfig:
+        LogGroup: !Ref NotificationLogGroup
+
+  NotificationLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      RetentionInDays: 30
+
+  HealthEndpoint:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ..
+      Handler: backend/server.healthHandler
+      Events:
+        Health:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: /api/health
+            Method: get
+            Auth:
+              Authorizer: NONE
+
+  ProtectedApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ..
+      Handler: lambda/api/index.handler
+      Events:
+        Dashboard:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/dashboard, Method: get }
+        Recommendations:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/recommendations, Method: get }
+        SchoolReadings:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/readings, Method: get }
+        SchoolPredictions:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/predictions, Method: get }
+        SchoolAlerts:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/alerts, Method: get }
+        SchoolAudit:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/audit, Method: get }
+        Acknowledge:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/alerts/{alertId}/acknowledge, Method: post }
+        SchoolContacts:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/contacts, Method: get }
+        ManageContacts:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/contacts, Method: post }
+        Demo:
+          Type: Api
+          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/demo/severe-pm25, Method: post }
+
+Outputs:
+  StateMachineArn:
+    Value: !Ref IngestionStateMachine
+  RawReadingsBucketName:
+    Value: !Ref RawReadingsBucket
+  ReadingsTableName:
+    Value: !Ref ReadingsTable
+  AuroraEndpoint:
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+  UserPoolId:
+    Value: !Ref SmartBreathUserPool
+  NotificationQueueUrl:
+    Value: !Ref NotificationQueue
+  NotificationDeadLetterQueueUrl:
+    Value: !Ref NotificationDeadLetterQueue

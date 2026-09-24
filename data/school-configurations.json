@@ -1,0 +1,74 @@
+[
+  {
+    "schoolId": "greenfield",
+    "schoolName": "Greenfield Academy",
+    "location": {
+      "reference": "greenfield-campus",
+      "latitude": 17.385,
+      "longitude": 78.4867
+    },
+    "childCount": 450,
+    "thresholds": {
+      "pm25Watch": 35,
+      "pm25High": 55,
+      "pm25Critical": 150,
+      "pm10Watch": 50,
+      "pm10High": 100,
+      "pm10Critical": 250,
+      "minimumPredictionConfidence": 0.7
+    },
+    "protectiveActions": {
+      "childSensitiveMode": true,
+      "outdoorActivityPolicy": "restrict-at-high",
+      "ventilationPolicy": "filtered-ventilation"
+    },
+    "notificationSettings": {
+      "administratorAlerts": true,
+      "parentAlerts": true,
+      "channels": ["email", "sms"]
+    },
+    "escalationSettings": {
+      "enabled": true,
+      "requiresInstitutionVerification": true,
+      "autonomousEmergencyCalls": false
+    },
+    "contacts": [
+      {
+        "contactId": "greenfield-admin",
+        "name": "Greenfield Administrator",
+        "type": "schoolAdministrator",
+        "channel": "email",
+        "destination": "configured-by-institution",
+        "verifiedByInstitution": true,
+        "enabled": true
+      },
+      {
+        "contactId": "greenfield-staff",
+        "name": "Greenfield Safety Lead",
+        "type": "schoolStaff",
+        "channel": "sms",
+        "destination": "configured-by-institution",
+        "verifiedByInstitution": true,
+        "enabled": true
+      },
+      {
+        "contactId": "greenfield-parent-group",
+        "name": "Greenfield Parent Group",
+        "type": "parentGuardian",
+        "channel": "email",
+        "destination": "configured-by-institution",
+        "verifiedByInstitution": true,
+        "enabled": true
+      },
+      {
+        "contactId": "greenfield-escalation",
+        "name": "Greenfield Verified Escalation Contact",
+        "type": "escalation",
+        "channel": "sms",
+        "destination": "configured-by-institution",
+        "verifiedByInstitution": true,
+        "enabled": true
+      }
+    ]
+  }
+]

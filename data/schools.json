@@ -1,0 +1,52 @@
+[
+  {
+    "id": "north-park",
+    "name": "North Park Academy",
+    "zone": "North",
+    "aqi": 122,
+    "temperature": 27,
+    "humidity": 61,
+    "children": 420,
+    "status": "monitoring"
+  },
+  {
+    "id": "harbor-crest",
+    "name": "Harbor Crest School",
+    "zone": "Harbor",
+    "aqi": 92,
+    "temperature": 25,
+    "humidity": 64,
+    "children": 370,
+    "status": "alert"
+  },
+  {
+    "id": "sunrise-commons",
+    "name": "Sunrise Commons Primary",
+    "zone": "East",
+    "aqi": 68,
+    "temperature": 24,
+    "humidity": 58,
+    "children": 310,
+    "status": "stable"
+  },
+  {
+    "id": "greenfield",
+    "name": "Greenfield Academy",
+    "zone": "West",
+    "aqi": 141,
+    "temperature": 29,
+    "humidity": 67,
+    "children": 450,
+    "status": "critical"
+  },
+  {
+    "id": "maple-grove",
+    "name": "Maple Grove Learning Center",
+    "zone": "Central",
+    "aqi": 76,
+    "temperature": 26,
+    "humidity": 60,
+    "children": 280,
+    "status": "watch"
+  }
+]
