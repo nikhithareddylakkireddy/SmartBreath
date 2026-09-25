@@ -355,7 +355,7 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref ProtectedApi
-            Path: /api/health
+            Path: '/api/health'
             Method: get
             Auth:
               Authorizer: NONE
@@ -368,34 +368,64 @@ Resources:
       Events:
         Dashboard:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/dashboard, Method: get }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/dashboard'
+            Method: get
         Recommendations:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/recommendations, Method: get }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/recommendations'
+            Method: get
         SchoolReadings:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/readings, Method: get }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/schools/{schoolId}/readings'
+            Method: get
         SchoolPredictions:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/predictions, Method: get }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/schools/{schoolId}/predictions'
+            Method: get
         SchoolAlerts:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/alerts, Method: get }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/schools/{schoolId}/alerts'
+            Method: get
         SchoolAudit:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/audit, Method: get }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/schools/{schoolId}/audit'
+            Method: get
         Acknowledge:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/alerts/{alertId}/acknowledge, Method: post }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/schools/{schoolId}/alerts/{alertId}/acknowledge'
+            Method: post
         SchoolContacts:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/contacts, Method: get }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/schools/{schoolId}/contacts'
+            Method: get
         ManageContacts:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/contacts, Method: post }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/schools/{schoolId}/contacts'
+            Method: post
         Demo:
           Type: Api
-          Properties: { RestApiId: !Ref ProtectedApi, Path: /api/schools/{schoolId}/demo/severe-pm25, Method: post }
+          Properties:
+            RestApiId: !Ref ProtectedApi
+            Path: '/api/schools/{schoolId}/demo/severe-pm25'
+            Method: post
 
 Outputs:
   StateMachineArn:
