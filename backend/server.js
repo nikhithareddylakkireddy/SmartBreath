@@ -9,15 +9,49 @@ const {
 const { NotificationService } = require('../notifications/service');
 const { authorize, bearerClaims } = require('../security/authorization');
 const { LocalRepository } = require('../data/repositories');
+const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const repository = new LocalRepository();
 const eventSubscribers = new Set();
+let websocketRelayQueue = Promise.resolve();
 const notifications = new NotificationService({
   repository,
-  publish: (event) => eventSubscribers.forEach((subscriber) => subscriber(event))
+  publish: (event) => {
+    eventSubscribers.forEach((subscriber) => subscriber(event));
+    relayEventToWebSocket(event);
+  }
 });
+
+function relayEventToWebSocket(event) {
+  if (process.env.NODE_ENV === 'test' || process.env.LOCAL_WS_RELAY === 'false') return;
+  websocketRelayQueue = websocketRelayQueue.then(() => new Promise((resolve) => {
+    const target = new URL(process.env.LOCAL_WS_PUBLISH_URL || 'http://localhost:8080/internal/events');
+    const body = JSON.stringify(event);
+    const request = http.request({
+      hostname: target.hostname,
+      port: target.port || 80,
+      path: `${target.pathname}${target.search}`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout: 1000
+    }, (response) => {
+      response.resume();
+      response.on('end', resolve);
+    });
+    request.on('error', (error) => {
+      if (error.code !== 'ECONNREFUSED') console.warn(`Local WebSocket relay unavailable: ${error.message}`);
+      resolve();
+    });
+    request.on('timeout', () => {
+      request.destroy();
+      console.warn('Local WebSocket relay timed out.');
+      resolve();
+    });
+    request.end(body);
+  })).catch((error) => console.warn(`Local WebSocket relay failed: ${error.message}`));
+}
 
 function protectedClaims(req) {
   return bearerClaims(req);
@@ -40,6 +74,17 @@ function healthHandler(_event) {
 }
 
 app.use(express.json());
+app.use((req, res, next) => {
+  const allowedOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:3001';
+  if (req.headers.origin === allowedOrigin) {
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Vary', 'Origin');
+  }
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-local-user');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({

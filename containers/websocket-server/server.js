@@ -21,10 +21,30 @@ function authenticateConnection({ token, expectedSchoolId, verifyToken = () => n
 }
 
 function createWebSocketServer({ port = process.env.PORT || 8080 } = {}) {
+  let publishEvent = () => {};
   const httpServer = http.createServer((req, res) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ status: 'ok', service: 'smartbreath-websocket' }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/internal/events') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        try {
+          const event = JSON.parse(body);
+          if (!event || typeof event.schoolId !== 'string' || typeof event.type !== 'string') {
+            throw new Error('Invalid event.');
+          }
+          publishEvent(event.schoolId, event);
+          res.writeHead(202, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ accepted: true, simulated: event.simulated === true }));
+        } catch (error) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: error.message }));
+        }
+      });
       return;
     }
     res.writeHead(404);
@@ -68,12 +88,16 @@ function createWebSocketServer({ port = process.env.PORT || 8080 } = {}) {
     });
   });
 
+  publishEvent = (schoolId, event) => {
+    const clients = channels.get(schoolId) || [];
+    for (const client of clients) if (client.readyState === 1) client.send(JSON.stringify(event));
+  };
+
   return {
     httpServer,
     websocket,
     publish(schoolId, event) {
-      const clients = channels.get(schoolId) || [];
-      for (const client of clients) if (client.readyState === 1) client.send(JSON.stringify(event));
+      publishEvent(schoolId, event);
     },
     start() { return new Promise((resolve) => httpServer.listen(port, resolve)); },
     stop() { clearInterval(heartbeat); return new Promise((resolve) => websocket.close(() => httpServer.close(resolve))); }

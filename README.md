@@ -1,5 +1,9 @@
 # SmartBreath
 
+For the concise local hackathon setup, demo sequence, judge script,
+architecture boundaries, and troubleshooting guide, see
+[DEMO_GUIDE.md](DEMO_GUIDE.md).
+
 SmartBreath is an AI-powered School & Child Safe Air Early-Warning System. Its purpose is to monitor hyperlocal particulate exposure around schools, forecast possible PM2.5 spikes, and provide clear protective-action guidance to configured school personnel and families. SmartBreath is not a medical diagnostic system and is not an emergency dispatcher.
 
 ## Phase 1 architecture
@@ -544,3 +548,36 @@ Remaining production work is intentionally deferred: implement and review the
 real Cognito verifier, DynamoDB/Aurora/S3 adapters, API Lambda adapter,
 WebSocket event transport, TLS termination, and operational throttling before
 deployment.
+
+## Phase 7 local hackathon demo
+
+The complete local demo uses three processes and no AWS resources:
+
+```powershell
+# Terminal 1
+npm start
+
+# Terminal 2
+cd containers\websocket-server
+npm install
+npm start
+
+# Terminal 3
+cd frontend
+Copy-Item .env.example .env.local
+npm install
+npm run dev
+```
+
+The backend and WebSocket services use safe localhost defaults shown in their
+`.env.example` files; no local environment file is required for the demo.
+Next.js uses `.env.local` so its browser requests target the backend and
+WebSocket ports.
+
+Open `http://localhost:3001`. The local backend is `http://localhost:3000`
+and the WebSocket health endpoint is `http://localhost:8080/health`. Choose
+**Sign in with local demo**, then select **Simulate Severe PM2.5**. The
+PM2.5-285 reading is marked `SIMULATED`, evaluated as critical, queued and
+delivered through the `LOCAL_MOCK` notification path, recorded in the audit
+timeline, and published to the school-isolated WebSocket channel. The UI
+explicitly states that no real parent or emergency service is contacted.

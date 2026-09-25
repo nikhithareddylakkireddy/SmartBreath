@@ -35,7 +35,7 @@ class NotificationService {
     const audit = createAuditEvent({ eventId: `alert-created-${alert.alertId}`, schoolId, eventType: 'alert.created', actorSource: 'local-demo', relatedAlertId: alert.alertId, details: { status: alert.status }, simulated: true });
     this.audit.push(audit);
     this.repository.saveAudit(audit);
-    this.publish({ type: 'risk.alert.created', schoolId, reading, risk, alert, simulated: true });
+    this.publish({ type: 'risk.alert.created', schoolId, reading, risk, alert, audit, simulated: true });
     return { reading, alert, risk };
   }
 
@@ -67,7 +67,7 @@ class NotificationService {
     const audit = createAuditEvent({ eventId: `alert-queued-${alertId}`, schoolId: alert.schoolId, eventType: 'alert.queued', actorSource: 'local-demo', relatedAlertId: alertId, details: { status: queued.status }, simulated: alert.simulated });
     this.audit.push(audit);
     this.repository.saveAudit(audit);
-    this.publish({ type: 'alert.queued', schoolId: alert.schoolId, alert: queued, job, simulated: alert.simulated });
+    this.publish({ type: 'alert.queued', schoolId: alert.schoolId, alert: queued, job, audit, simulated: alert.simulated });
     return job;
   }
 
@@ -81,7 +81,7 @@ class NotificationService {
     const audit = createAuditEvent({ eventId: `alert-delivered-${alertId}`, schoolId: alert.schoolId, eventType: 'alert.delivered', actorSource: 'local-provider', relatedAlertId: alertId, details: { status: delivered.status }, simulated: alert.simulated });
     this.audit.push(audit);
     this.repository.saveAudit(audit);
-    this.publish({ type: 'alert.delivered', schoolId: alert.schoolId, alert: delivered, simulated: alert.simulated });
+    this.publish({ type: 'alert.delivered', schoolId: alert.schoolId, alert: delivered, audit, simulated: alert.simulated });
     return delivered;
   }
 
@@ -94,7 +94,7 @@ class NotificationService {
     const audit = createAuditEvent({ eventId: `ack-${alertId}-${actor}`, schoolId, eventType: 'alert.acknowledged', actorSource: actor, relatedAlertId: alertId, details: { actor }, simulated: alert.simulated });
     this.audit.push(audit);
     this.repository.saveAudit(audit);
-    this.publish({ type: 'alert.acknowledged', schoolId, alert: updated, simulated: alert.simulated });
+    this.publish({ type: 'alert.acknowledged', schoolId, alert: updated, audit, simulated: alert.simulated });
     return updated;
   }
 
