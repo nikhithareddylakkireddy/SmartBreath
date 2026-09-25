@@ -27,7 +27,7 @@ Parameters:
 
 Globals:
   Function:
-    Runtime: nodejs20.x
+    Runtime: nodejs24.x
     MemorySize: 256
     Timeout: 30
     Tracing: Active
@@ -213,24 +213,28 @@ Resources:
   IngestionLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       RetentionInDays: 30
 
   PersistenceLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       RetentionInDays: 30
 
   AuditLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       RetentionInDays: 30
 
   StateMachineLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       RetentionInDays: 30
 
@@ -342,6 +346,7 @@ Resources:
   NotificationLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       RetentionInDays: 30
 
