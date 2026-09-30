@@ -256,6 +256,10 @@ def simulated_demo_response(school_id: str, level: str) -> dict[str, Any]:
         "job": {"alertId": alert_id, "simulated": True, "localProviderMode": "LOCAL_MOCK"},
         "recommendations": SIMULATED_RECOMMENDATIONS,
         "localProviderMode": "LOCAL_MOCK",
+        "notificationResults": [
+            {"channel": "email", "status": "simulated", "provider": "LOCAL_MOCK_EMAIL"},
+            {"channel": "whatsapp", "status": "simulated", "provider": "LOCAL_MOCK_WHATSAPP"},
+        ],
         "simulated": True,
     }
 
@@ -839,6 +843,13 @@ if alert:
     alert_columns[1].metric("Notification", "SIMULATED")
     alert_columns[2].metric("Acknowledgement", "YES" if alert.get("status") == "ACKNOWLEDGED" else "PENDING")
     st.caption(f"Notification: LOCAL_MOCK • Created: {alert.get('createdAt', 'not available')}")
+    st.subheader("Notification Status")
+    notification_results = st.session_state.get("demo_response", {}).get("notificationResults", [])
+    notification_columns = st.columns(2)
+    for column, channel in zip(notification_columns, ("email", "whatsapp")):
+        result = next((item for item in notification_results if item.get("channel") == channel), None)
+        with column:
+            st.metric(channel.title(), f"{(result or {}).get('provider', 'LOCAL_MOCK').replace('_', ' ')}")
     lifecycle = ["CREATED", "QUEUED", "DELIVERY_ATTEMPTED", "DELIVERED", "ACKNOWLEDGED"]
     current_index = lifecycle.index(alert["status"]) if alert.get("status") in lifecycle else -1
     st.write("  \n↓  \n".join(f"**{item.replace('_', ' ')}**" if index <= current_index else item.replace("_", " ") for index, item in enumerate(lifecycle)))

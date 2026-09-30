@@ -47,6 +47,27 @@ function validateSchoolConfiguration(config) {
   } else {
     errors.push('contacts must be an array');
   }
+  if (config.parentContacts !== undefined) {
+    if (!Array.isArray(config.parentContacts)) {
+      errors.push('parentContacts must be an array');
+    } else {
+      config.parentContacts.forEach((contact) => {
+        for (const field of ['parentId', 'schoolId', 'studentReference', 'parentName']) {
+          if (typeof contact?.[field] !== 'string' || contact[field].length === 0) {
+            errors.push(`parentContacts.${field} must be a non-empty string`);
+          }
+        }
+        for (const field of ['email', 'phone']) {
+          if (contact?.[field] !== undefined && typeof contact[field] !== 'string') {
+            errors.push(`parentContacts.${field} must be a string when provided`);
+          }
+        }
+        for (const field of ['emailEnabled', 'whatsappEnabled', 'notificationConsent', 'verified', 'active']) {
+          if (typeof contact?.[field] !== 'boolean') errors.push(`parentContacts.${field} must be a boolean`);
+        }
+      });
+    }
+  }
 
   return validate('SchoolConfiguration', errors);
 }

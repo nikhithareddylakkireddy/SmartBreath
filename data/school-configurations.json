@@ -25,13 +25,28 @@
     "notificationSettings": {
       "administratorAlerts": true,
       "parentAlerts": true,
-      "channels": ["email", "sms"]
+      "channels": ["email", "sms", "whatsapp"]
     },
     "escalationSettings": {
       "enabled": true,
       "requiresInstitutionVerification": true,
       "autonomousEmergencyCalls": false
     },
+    "parentContacts": [
+      {
+        "parentId": "greenfield-demo-parent",
+        "schoolId": "greenfield",
+        "studentReference": "demo-student-001",
+        "parentName": "Demo Parent",
+        "email": "demo-parent@example.invalid",
+        "phone": "+10000000000",
+        "emailEnabled": true,
+        "whatsappEnabled": true,
+        "notificationConsent": true,
+        "verified": true,
+        "active": true
+      }
+    ],
     "contacts": [
       {
         "contactId": "greenfield-admin",

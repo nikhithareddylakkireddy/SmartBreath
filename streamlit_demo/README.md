@@ -102,6 +102,16 @@ Public mode must remain enabled on Community Cloud. Do not set
 backend is intentionally provided. The public app has no dependency on
 `localhost:3000`.
 
+## Parent notification safety
+
+The public dashboard displays email and WhatsApp notification status as
+`LOCAL_MOCK`. It never accepts arbitrary parent addresses or phone numbers and
+never sends real messages. The backend notification service supports opt-in
+provider boundaries, but real delivery requires institution-approved SMTP or
+WhatsApp Business Cloud configuration plus active, verified, consented
+parent contacts for the matching school. Provider failures and duplicate-send
+prevention remain auditable; credentials are never displayed in the dashboard.
+
 ## Final hackathon demo sequence
 
 1. Open the app and leave it on the Command Center.

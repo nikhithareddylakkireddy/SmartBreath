@@ -20,4 +20,8 @@ function notificationIdempotencyKey(job) {
   return `${job.alertId}:${job.schoolId}:${job.severity}`;
 }
 
-module.exports = { validateNotificationJob, notificationIdempotencyKey };
+function channelIdempotencyKey(job, recipient) {
+  return `${job.alertId}:${job.schoolId}:${recipient.parentId || recipient.contactId}:${recipient.channel}`;
+}
+
+module.exports = { validateNotificationJob, notificationIdempotencyKey, channelIdempotencyKey };

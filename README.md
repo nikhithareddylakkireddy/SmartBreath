@@ -33,6 +33,49 @@ Runtime validators in `domain/schemas/` reject malformed records before later pe
 - Every created alert can be paired with an `AuditEvent`; Phase 2 will add durable audit persistence.
 - Simulated readings, alerts, and audit events are explicitly marked with `simulated: true` and demo messages are prefixed with `[SIMULATED DEMO]`.
 
+## Phase 17 parent notifications
+
+High and critical alerts can route to institution-configured parent contacts
+through the existing notification service. Email uses the
+`sendEmailNotification` provider boundary and WhatsApp uses the official
+WhatsApp Business Cloud API template boundary. Providers are selected from
+environment configuration; missing configuration always falls back to
+`LOCAL_MOCK`, and simulated alerts always remain mocked.
+
+Before a parent notification is eligible, the contact must be active,
+institution-verified, consent-enabled, configured for the same `schoolId`, and
+have the requested channel enabled. Email and WhatsApp delivery results are
+tracked independently, failures are audited without crashing the alert flow,
+and `alertId + parentId + channel` prevents duplicate sends. Provider details
+and any failures are technical diagnostics, not parent-facing data.
+
+The public Streamlit demonstration never sends real parent messages. It shows
+`LOCAL_MOCK` email and WhatsApp statuses only. Real parent messaging requires
+institution-approved provider configuration, verified contacts, and
+notification consent. The local service prevents duplicate channel sends within
+one process, including concurrent calls, and allows retry after a failed
+provider attempt. This is not a distributed guarantee: production deployment
+must inject a durable atomic notification outbox/store (for example a DynamoDB
+conditional record) through the service's `idempotencyStore` boundary. That
+adapter can implement atomic `claim(key)`, `markSent(key, result)`, and
+`release(key)` operations.
+
+Example local configuration is in `backend/.env.example`. Do not put secrets
+in source control:
+
+```text
+SMARTBREATH_SMTP_HOST=
+SMARTBREATH_SMTP_PORT=465
+SMARTBREATH_SMTP_USER=
+SMARTBREATH_SMTP_PASSWORD=
+SMARTBREATH_EMAIL_FROM=
+SMARTBREATH_WHATSAPP_ENABLED=false
+SMARTBREATH_WHATSAPP_ACCESS_TOKEN=
+SMARTBREATH_WHATSAPP_PHONE_NUMBER_ID=
+SMARTBREATH_WHATSAPP_API_VERSION=v21.0
+SMARTBREATH_WHATSAPP_TEMPLATE_NAME=
+```
+
 ## Deterministic policy engine
 
 `domain/policy.js` evaluates current PM2.5 and PM10 independently from any model. A prediction is used only when its confidence meets the school's configured minimum. Current critical readings remain critical even when a prediction is missing or low-confidence. Child-sensitive policies and school-specific thresholds are configuration inputs, not hidden constants in the evaluator.

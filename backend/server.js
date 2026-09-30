@@ -169,15 +169,21 @@ app.post('/api/schools/:schoolId/alerts/:alertId/acknowledge', (req, res) => {
   } catch (error) { handleError(error, res); }
 });
 
-app.post('/api/schools/:schoolId/demo/severe-pm25', (req, res) => {
+app.post('/api/schools/:schoolId/demo/severe-pm25', async (req, res) => {
   try {
     const claims = bearerClaims(req);
     authorize({ claims, schoolId: req.params.schoolId, allowedRoles: ['school-administrator', 'school-staff'], action: 'create-demo' });
     if (req.params.schoolId !== 'greenfield') throw new Error('No configuration found for school.');
     const demo = notifications.createDemoAlert('greenfield');
     const job = notifications.queueAlert(demo.alert.alertId);
-    notifications.deliverLocal(demo.alert.alertId);
-    res.status(201).json({ ...demo, alert: notifications.alerts.get(demo.alert.alertId), job, localProviderMode: 'LOCAL_MOCK' });
+    const delivery = await notifications.deliverLocal(demo.alert.alertId);
+    res.status(201).json({
+      ...demo,
+      alert: delivery.alert,
+      job,
+      notificationResults: delivery.results,
+      localProviderMode: 'LOCAL_MOCK'
+    });
   } catch (error) { handleError(error, res); }
 });
 

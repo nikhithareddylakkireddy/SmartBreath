@@ -1,16 +1,23 @@
 const { createAlert, createAuditEvent, getSchoolConfiguration, evaluateRisk, createSeverePM25DemoReading } = require('../domain');
-const { routeRecipients } = require('./routing');
-const { notificationIdempotencyKey, validateNotificationJob } = require('./contract');
+const { routeRecipients, parentRoutingDecisions } = require('./routing');
+const { notificationIdempotencyKey, channelIdempotencyKey, validateNotificationJob } = require('./contract');
+const { createProviders } = require('./providers');
 const { transitionAlert } = require('./lifecycle');
 const { LocalRepository } = require('../data/repositories');
 
 class NotificationService {
-  constructor({ repository = new LocalRepository(), publish = () => {} } = {}) {
+  constructor({ repository = new LocalRepository(), publish = () => {}, providers = createProviders(), idempotencyStore = null } = {}) {
     this.repository = repository;
     this.publish = publish;
     this.alerts = new Map();
     this.audit = [];
     this.jobs = new Map();
+    this.providers = providers;
+    this.notificationResults = new Map();
+    this.inFlightNotifications = new Map();
+    // Local state prevents duplicates within this process only. A durable store
+    // can be injected by a DynamoDB/outbox adapter for distributed guarantees.
+    this.idempotencyStore = idempotencyStore;
   }
 
   createDemoAlert(schoolId = 'greenfield') {
@@ -61,6 +68,21 @@ class NotificationService {
     };
     validateNotificationJob(job);
     this.jobs.set(notificationIdempotencyKey(job), job);
+    parentRoutingDecisions(config, alert.severity)
+      .filter((decision) => !decision.allowed)
+      .forEach((decision) => {
+        const audit = createAuditEvent({
+          eventId: `parent-notification-blocked-${alert.alertId}-${decision.parent.parentId}-${decision.channel}`,
+          schoolId: alert.schoolId,
+          eventType: 'parent.notification.blocked',
+          actorSource: 'notification-router',
+          relatedAlertId: alert.alertId,
+          details: { parentId: decision.parent.parentId, channel: decision.channel, reason: decision.reason },
+          simulated: alert.simulated
+        });
+        this.audit.push(audit);
+        this.repository.saveAudit(audit);
+      });
     const queued = transitionAlert(alert, 'QUEUED');
     this.alerts.set(alertId, queued);
     this.repository.saveAlert(queued);
@@ -71,18 +93,93 @@ class NotificationService {
     return job;
   }
 
-  deliverLocal(alertId) {
+  async deliverLocal(alertId) {
     const alert = this.alerts.get(alertId);
     if (!alert) throw new Error('Alert not found.');
     const attempted = transitionAlert(alert, 'DELIVERY_ATTEMPTED');
-    const delivered = transitionAlert(attempted, 'DELIVERED');
+    const job = [...this.jobs.values()].find((item) => item.alertId === alertId);
+    const results = [];
+    for (const recipient of job?.recipients || []) {
+      const key = channelIdempotencyKey(job, recipient);
+      results.push(await this.deliverRecipient(alert, job, recipient, key));
+    }
+    const hasFailure = results.some((result) => result.status === 'failed');
+    const delivered = transitionAlert(attempted, hasFailure ? 'DELIVERY_FAILED' : 'DELIVERED');
     this.alerts.set(alertId, delivered);
     this.repository.saveAlert(delivered);
-    const audit = createAuditEvent({ eventId: `alert-delivered-${alertId}`, schoolId: alert.schoolId, eventType: 'alert.delivered', actorSource: 'local-provider', relatedAlertId: alertId, details: { status: delivered.status }, simulated: alert.simulated });
+    const audit = createAuditEvent({ eventId: `alert-delivered-${alertId}`, schoolId: alert.schoolId, eventType: hasFailure ? 'alert.delivery_failed' : 'alert.delivered', actorSource: 'notification-router', relatedAlertId: alertId, details: { status: delivered.status, results }, simulated: alert.simulated });
     this.audit.push(audit);
     this.repository.saveAudit(audit);
-    this.publish({ type: 'alert.delivered', schoolId: alert.schoolId, alert: delivered, audit, simulated: alert.simulated });
-    return delivered;
+    this.publish({ type: hasFailure ? 'alert.delivery.failed' : 'alert.delivered', schoolId: alert.schoolId, alert: delivered, audit, results, simulated: alert.simulated });
+    return { alert: delivered, results };
+  }
+
+  async deliverRecipient(alert, job, recipient, key) {
+      if (this.notificationResults.has(key)) return this.notificationResults.get(key);
+      if (this.inFlightNotifications.has(key)) return this.inFlightNotifications.get(key);
+      const delivery = (async () => {
+        const notification = {
+          recipient: recipient.destination,
+          subject: 'Smart Breath Alert – Air Quality Action Required',
+          message: this.parentMessage(alert, recipient),
+          alertId: alert.alertId,
+          schoolId: alert.schoolId,
+          severity: alert.severity,
+          timestamp: alert.createdAt,
+          simulated: alert.simulated
+        };
+        try {
+          if (this.idempotencyStore?.claim) {
+            const claimed = await this.idempotencyStore.claim(key);
+            if (!claimed) return this.notificationResults.get(key) || {
+              key, channel: recipient.channel, status: 'already-claimed', simulated: alert.simulated
+            };
+          }
+          const provider = this.providers[recipient.channel];
+          if (!provider) throw new Error(`No configured provider for ${recipient.channel}.`);
+          const result = recipient.channel === 'email'
+            ? await provider.sendEmailNotification(notification)
+            : recipient.channel === 'whatsapp'
+              ? await provider.sendWhatsAppNotification(notification)
+              : await provider.sendMessage(recipient.destination, notification.message, notification);
+          const deliveredResult = { ...result, key, status: result.status || 'sent' };
+          this.notificationResults.set(key, deliveredResult);
+          if (this.idempotencyStore?.markSent) await this.idempotencyStore.markSent(key, deliveredResult);
+          this.recordNotificationAudit(alert, recipient, deliveredResult);
+          return deliveredResult;
+        } catch (error) {
+          const failed = { key, channel: recipient.channel, status: 'failed', error: error.message, simulated: alert.simulated };
+          if (this.idempotencyStore?.release) await this.idempotencyStore.release(key);
+          this.recordNotificationAudit(alert, recipient, failed);
+          return failed;
+        } finally {
+          this.inFlightNotifications.delete(key);
+        }
+      })();
+      this.inFlightNotifications.set(key, delivery);
+      return delivery;
+  }
+
+  parentMessage(alert, recipient) {
+    const school = getSchoolConfiguration(alert.schoolId);
+    if (recipient.channel === 'whatsapp') {
+      return `SMART BREATH ALERT\n\nSchool: ${school.schoolName}\nRisk: ${alert.severity.toUpperCase()}\nPM2.5: ${alert.currentValue} µg/m³\n\nRecommended action: Please follow the school's air-quality safety instructions and keep children indoors if advised by the school.\n\nThis is an air-quality safety notification, not a medical diagnosis.\nAlert ID: ${alert.alertId}\nTime: ${alert.createdAt}`;
+    }
+    return `Hello Parent/Guardian,\n\nSmart Breath has detected a high-risk air-quality condition at your child's school.\n\nSchool: ${school.schoolName}\nCurrent PM2.5: ${alert.currentValue} µg/m³\nRisk: ${alert.severity.toUpperCase()}\n\nRecommended school actions:\n• Keep outdoor activities indoors.\n• Follow the school's air-quality protective protocol.\n• Monitor official school communication channels.\n\nThis notification is an air-quality safety alert and is not a medical diagnosis.\n\nAlert ID: ${alert.alertId}\nTime: ${alert.createdAt}\n\nSmart Breath\nSchool Air Quality Early-Warning System`;
+  }
+
+  recordNotificationAudit(alert, recipient, result) {
+    const event = createAuditEvent({
+      eventId: `notification-${result.key}-${result.status}`,
+      schoolId: alert.schoolId,
+      eventType: `${recipient.channel}.${result.status}`,
+      actorSource: 'notification-router',
+      relatedAlertId: alert.alertId,
+      details: { channel: recipient.channel, status: result.status, error: result.error },
+      simulated: alert.simulated
+    });
+    this.audit.push(event);
+    this.repository.saveAudit(event);
   }
 
   acknowledge(schoolId, alertId, actor) {
