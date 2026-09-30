@@ -24,6 +24,7 @@ from model.forecasting import (  # noqa: E402
     forecast_three_hours,
     train_development_forecaster,
 )
+from streamlit_demo.simulator import advance_scenario, history_for, reading_for, sensor_ids
 
 
 DEMO_MODE = os.getenv("SMARTBREATH_DEMO_MODE", "public").strip().lower()
@@ -38,12 +39,6 @@ RISK_COLORS = {
     "ELEVATED": "🟡",
     "HIGH": "🟠",
     "CRITICAL": "🔴",
-}
-SCENARIOS = {
-    "NORMAL": {"pm25": 18, "pm10": 31, "temperature": 26, "humidity": 58, "windSpeed": 2},
-    "ELEVATED": {"pm25": 42, "pm10": 64, "temperature": 27, "humidity": 60, "windSpeed": 2},
-    "HIGH": {"pm25": 82, "pm10": 118, "temperature": 28, "humidity": 63, "windSpeed": 3},
-    "CRITICAL": {"pm25": 285, "pm10": 340, "temperature": 29, "humidity": 67, "windSpeed": 3},
 }
 SIMULATED_RECOMMENDATIONS = [
     {
@@ -89,6 +84,21 @@ SCHOOL_BY_ID = {item.get("schoolId"): item for item in SCHOOL_CONFIGURATIONS}
 DEFAULT_SCHOOL_ID = os.getenv("SMARTBREATH_SCHOOL_ID", "greenfield")
 if DEFAULT_SCHOOL_ID not in SCHOOL_BY_ID and SCHOOL_BY_ID:
     DEFAULT_SCHOOL_ID = next(iter(SCHOOL_BY_ID))
+if DEMO_MODE == "public":
+    SCHOOL_BY_ID["greenfield"].update({"sensors": ["GF-01", "GF-02", "GF-03"], "monitoringStatus": "active"})
+    for demo_school_id, demo_name, demo_sensors in (
+        ("sunrise-public", "Sunrise Public School", ["SP-01", "SP-02"]),
+        ("smart-valley", "Smart Valley School", ["SV-01", "SV-02", "SV-03"]),
+    ):
+        SCHOOL_BY_ID[demo_school_id] = {
+            "schoolId": demo_school_id,
+            "schoolName": demo_name,
+            "location": {"reference": f"{demo_school_id}-demo-campus"},
+            "sensors": demo_sensors,
+            "monitoringStatus": "active",
+            "thresholds": {"pm25Watch": 35, "pm25High": 55, "pm25Critical": 150},
+            "protectiveActions": {"childSensitiveMode": True},
+        }
 
 
 def school_name(school_id: str) -> str:
@@ -118,16 +128,13 @@ def backend_request(method: str, path: str, school_id: str, **kwargs: Any) -> An
 
 
 def scenario_reading(school_id: str, level: str, timestamp: str | None = None) -> dict[str, Any]:
-    values = SCENARIOS[level]
-    return {
-        "schoolId": school_id,
-        "sensorId": "streamlit-demo-sensor-001",
-        "timestamp": timestamp or now_iso(),
-        **values,
-        "windDirection": 180,
-        "dataSource": "streamlit-public-demo",
-        "simulated": True,
-    }
+    configuration = SCHOOL_BY_ID.get(school_id, {"schoolId": school_id, "schoolName": school_id})
+    return reading_for(
+        configuration,
+        sensor_ids(configuration)[0],
+        level,
+        timestamp=datetime.fromisoformat((timestamp or now_iso()).replace("Z", "+00:00")),
+    )
 
 
 def forecast_for(level: str, current_pm25: int) -> list[dict[str, Any]]:
@@ -284,6 +291,59 @@ def load_local_state(school_id: str) -> None:
         state["backend_error"] = str(error)
 
 
+def initialize_public_network() -> None:
+    state = st.session_state
+    state["network_readings"] = {}
+    state["network_history"] = {}
+    state["network_scenarios"] = {}
+    for school_id, configuration in SCHOOL_BY_ID.items():
+        sensors = sensor_ids(configuration)
+        level = {"greenfield": "NORMAL", "sunrise-public": "ELEVATED", "smart-valley": "NORMAL"}.get(school_id, "NORMAL")
+        state["network_scenarios"][school_id] = level
+        for sensor_id in sensors:
+            state["network_readings"][(school_id, sensor_id)] = reading_for(configuration, sensor_id, level)
+            state["network_history"][(school_id, sensor_id)] = history_for(configuration, sensor_id, level)
+    state["sensor_id"] = sensor_ids(SCHOOL_BY_ID[state["school_id"]])[0]
+    state["reading"] = state["network_readings"][(state["school_id"], state["sensor_id"])]
+    state["history"] = state["network_history"][(state["school_id"], state["sensor_id"])]
+
+
+def select_public_sensor(school_id: str, sensor_id: str) -> None:
+    state = st.session_state
+    state["sensor_id"] = sensor_id
+    state["reading"] = state["network_readings"][(school_id, sensor_id)]
+    state["history"] = state["network_history"][(school_id, sensor_id)]
+    state["scenario"] = state["network_scenarios"][school_id]
+    state["forecast"], state["model_info"] = build_development_forecast(state["reading"], state["history"])
+
+
+def advance_live_tick() -> None:
+    state = st.session_state
+    school_id = state["school_id"]
+    sensor_id = state["sensor_id"]
+    configuration = SCHOOL_BY_ID[school_id]
+    state["live_tick"] += 1
+    next_level = advance_scenario(state["network_scenarios"][school_id], state["live_tick"])
+    state["network_scenarios"][school_id] = next_level
+    reading = reading_for(configuration, sensor_id, next_level, state["live_tick"])
+    state["network_readings"][(school_id, sensor_id)] = reading
+    state["network_history"][(school_id, sensor_id)] = (state["network_history"][(school_id, sensor_id)] + [reading])[-96:]
+    state["scenario"] = next_level
+    state["reading"] = reading
+    state["history"] = state["network_history"][(school_id, sensor_id)]
+    state["risk"] = {
+        "currentRisk": next_level.lower(),
+        "predictedRisk": next_level.lower(),
+        "severity": next_level.lower(),
+        "reason": f"SIMULATED SENSOR {sensor_id} advanced to the {next_level} monitoring state.",
+        "simulated": True,
+    }
+    if next_level == "CRITICAL":
+        apply_simulated_scenario("CRITICAL")
+    else:
+        state["forecast"], state["model_info"] = build_development_forecast(reading, state["history"])
+
+
 def initialize_state() -> None:
     defaults = {
         "school_id": DEFAULT_SCHOOL_ID,
@@ -302,6 +362,12 @@ def initialize_state() -> None:
         "backend_error": None,
         "demo_error": None,
         "ack_error": None,
+        "network_readings": {},
+        "network_history": {},
+        "network_scenarios": {},
+        "sensor_id": None,
+        "live_running": False,
+        "live_tick": 0,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -309,8 +375,7 @@ def initialize_state() -> None:
         return
     if DEMO_MODE == "public":
         st.session_state["health"] = {"status": "ok", "service": "public-demo"}
-        st.session_state["history"] = create_synthetic_history(school_id=st.session_state["school_id"])
-        st.session_state["reading"] = scenario_reading(st.session_state["school_id"], "NORMAL")
+        initialize_public_network()
         st.session_state["recommendations"] = SIMULATED_RECOMMENDATIONS
         st.session_state["forecast"], st.session_state["model_info"] = build_development_forecast(
             st.session_state["reading"], st.session_state["history"]
@@ -320,7 +385,13 @@ def initialize_state() -> None:
 
 
 def apply_simulated_scenario(level: str) -> None:
-    response = simulated_demo_response(st.session_state["school_id"], level)
+    school_id = st.session_state["school_id"]
+    configuration = SCHOOL_BY_ID[school_id]
+    sensor_id = st.session_state.get("sensor_id") or sensor_ids(configuration)[0]
+    response = simulated_demo_response(school_id, level)
+    response["reading"] = reading_for(configuration, sensor_id, level)
+    if response.get("alert"):
+        response["alert"]["sensorId"] = sensor_id
     st.session_state["scenario"] = level
     st.session_state["reading"] = response["reading"]
     st.session_state["risk"] = response["risk"]
@@ -365,6 +436,8 @@ def run_critical_demo() -> None:
         st.session_state["reading"] = result.get("reading")
         st.session_state["risk"] = result.get("risk")
         st.session_state["alert"] = result.get("alert")
+        if st.session_state["alert"]:
+            st.session_state["alert"]["sensorId"] = result["reading"].get("sensorId")
         st.session_state["demo_response"] = result
         st.session_state["forecast"] = fallback_forecast("CRITICAL", result["reading"]["pm25"])
         st.session_state["model_info"] = {
@@ -432,17 +505,25 @@ def acknowledge_alert() -> None:
 def report_csv(reading: dict[str, Any], forecast: list[dict[str, Any]], school_id: str) -> bytes:
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["school_id", "school_name", "record_type", "horizon", "pm25", "pm10",
+    writer.writerow(["school_id", "school_name", "sensor_id", "record_type", "horizon", "pm25", "pm10",
                      "temperature", "humidity", "wind_speed", "risk", "simulated", "timestamp"])
     risk = risk_label(st.session_state.get("risk"), reading)
     writer.writerow([
-        school_id, school_name(school_id), "reading", "Current", reading.get("pm25"),
+        school_id, school_name(school_id), reading.get("sensorId", ""), "reading", "Current", reading.get("pm25"),
         reading.get("pm10"), reading.get("temperature"), reading.get("humidity"),
         reading.get("windSpeed"), risk, reading.get("simulated", True), reading.get("timestamp", ""),
     ])
+    for historical in st.session_state.get("history", [])[-24:]:
+        writer.writerow([
+            school_id, school_name(school_id), historical.get("sensorId", reading.get("sensorId", "")),
+            "historical", "", historical.get("pm25"), historical.get("pm10"),
+            historical.get("temperature"), historical.get("humidity"),
+            historical.get("windSpeed"), risk, historical.get("simulated", True),
+            historical.get("timestamp", ""),
+        ])
     for item in forecast[1:]:
         writer.writerow([
-            school_id, school_name(school_id), "forecast", item["horizon"], item["pm25"],
+            school_id, school_name(school_id), reading.get("sensorId", ""), "forecast", item["horizon"], item["pm25"],
             "", "", "", "", risk, item.get("simulated", True), reading.get("timestamp", ""),
         ])
     return output.getvalue().encode("utf-8")
@@ -450,6 +531,8 @@ def report_csv(reading: dict[str, Any], forecast: list[dict[str, Any]], school_i
 
 initialize_state()
 school_ids = list(SCHOOL_BY_ID) or [DEFAULT_SCHOOL_ID]
+if DEMO_MODE == "local":
+    school_ids = [DEFAULT_SCHOOL_ID]
 selected_school = st.sidebar.selectbox(
     "School context",
     school_ids,
@@ -465,6 +548,35 @@ if selected_school != st.session_state["school_id"]:
     st.session_state["audit"] = []
     st.rerun()
 
+school_id = st.session_state["school_id"]
+school = SCHOOL_BY_ID.get(school_id, {})
+available_sensors = sensor_ids(school)
+if DEMO_MODE == "public":
+    selected_sensor = st.sidebar.selectbox(
+        "Sensor context",
+        available_sensors,
+        index=available_sensors.index(st.session_state.get("sensor_id")) if st.session_state.get("sensor_id") in available_sensors else 0,
+    )
+    if selected_sensor != st.session_state.get("sensor_id"):
+        select_public_sensor(school_id, selected_sensor)
+        st.rerun()
+    st.sidebar.caption("SIMULATED SENSOR • deterministic demo readings")
+    live_start, live_stop = st.sidebar.columns(2)
+    if live_start.button("Start Live Simulation", use_container_width=True):
+        st.session_state["live_running"] = True
+        advance_live_tick()
+        st.rerun()
+    if live_stop.button("STOP SIMULATION", use_container_width=True):
+        st.session_state["live_running"] = False
+        st.rerun()
+    if st.sidebar.button("Advance tick", use_container_width=True):
+        advance_live_tick()
+        st.rerun()
+    st.sidebar.caption(
+        f"Live simulation: **{'RUNNING' if st.session_state['live_running'] else 'STOPPED'}** "
+        f"• bounded manual ticks: {st.session_state['live_tick']}"
+    )
+
 st.sidebar.caption("Public mode is simulated and backend-free." if DEMO_MODE == "public"
                    else f"Local backend: {BACKEND_URL}")
 if st.sidebar.button("Refresh dashboard"):
@@ -475,8 +587,6 @@ if st.sidebar.button("Refresh dashboard"):
         load_local_state(st.session_state["school_id"])
     st.rerun()
 
-school_id = st.session_state["school_id"]
-school = SCHOOL_BY_ID.get(school_id, {})
 reading = st.session_state.get("reading") or scenario_reading(school_id, st.session_state["scenario"])
 risk = st.session_state.get("risk")
 alert = st.session_state.get("alert")
@@ -494,7 +604,10 @@ else:
     st.success("Backend connected • local authenticated demo mode")
 
 st.header("Current Air Quality")
-st.caption(f"School: **{school_name(school_id)}**  •  Simulation status: **SIMULATED DEMO**")
+st.caption(
+    f"School: **{school_name(school_id)}**  •  Sensor: **{reading.get('sensorId', 'not available')}** "
+    "•  Sensor status: **SIMULATED SENSOR**"
+)
 metric_columns = st.columns(5)
 for column, (label, key, unit) in zip(
     metric_columns,
@@ -506,6 +619,29 @@ for column, (label, key, unit) in zip(
         st.metric(label, f"{reading.get(key, '—')} {unit}")
 st.markdown(f"### {RISK_COLORS.get(current_risk, '⚪')} Current risk: {current_risk}")
 st.caption(f"Last updated: {reading.get('timestamp', 'not available')}")
+
+st.header("School Network Overview")
+st.caption("SIMULATED DEMO • This comparison is not a ranking of real-world school safety.")
+overview = []
+for overview_id, configuration in SCHOOL_BY_ID.items():
+    if DEMO_MODE == "public":
+        overview_reading = st.session_state["network_readings"][(overview_id, sensor_ids(configuration)[0])]
+        overview_risk = risk_label(None, overview_reading)
+        active_alerts = 1 if overview_risk == "CRITICAL" else 0
+    else:
+        overview_reading = reading if overview_id == school_id else {}
+        overview_risk = current_risk if overview_id == school_id else "NOT LOADED"
+        active_alerts = len(st.session_state.get("alerts", [])) if overview_id == school_id else 0
+    overview.append({
+        "School": configuration.get("schoolName", overview_id),
+        "Sensors": len(sensor_ids(configuration)),
+        "Current PM2.5": overview_reading.get("pm25", "—"),
+        "Risk": overview_risk,
+        "Active Alerts": active_alerts,
+        "Monitoring Status": configuration.get("monitoringStatus", "configured"),
+        "Simulated": True,
+    })
+st.dataframe(overview, hide_index=True, use_container_width=True)
 
 st.header("Demo Sensor Simulator")
 st.caption("SIMULATED DEMO • This control is not a real sensor.")

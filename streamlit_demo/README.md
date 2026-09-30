@@ -21,6 +21,21 @@ buttons, operational alert lifecycle, audit timeline, and a CSV report
 download. These are presentation features over the existing contracts; the
 Streamlit app does not replace the backend risk engine.
 
+## Phase 14 simulated sensor network
+
+Public mode includes three fictional demo schools and multiple deterministic
+simulated sensors per school. Use the school and sensor selectors to keep
+readings, history, forecast, alerts, and audit events scoped to the selected
+context. The NORMAL, ELEVATED, HIGH, and CRITICAL controls use bounded
+scenario values; CRITICAL preserves the judge flow at PM2.5 `285`.
+
+**Start Live Simulation** advances one bounded simulated tick for the selected
+sensor. Use **Advance tick** for another reading and **STOP SIMULATION** to
+stop live controls. This is intentionally a Streamlit-safe, user-driven
+simulation rather than an uncontrolled background process. Every record is
+marked `SIMULATED SENSOR` or `SIMULATED DEMO`, and no real IoT feed,
+notification, contact, or emergency service is used.
+
 ## Forecasting and data provenance
 
 Public mode creates explicitly labeled synthetic development history with
