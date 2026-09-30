@@ -21,6 +21,23 @@ buttons, operational alert lifecycle, audit timeline, and a CSV report
 download. These are presentation features over the existing contracts; the
 Streamlit app does not replace the backend risk engine.
 
+## Forecasting and data provenance
+
+Public mode creates explicitly labeled synthetic development history with
+PM2.5, PM10, weather, hour/day features, lagged pollutant values, and rolling
+PM2.5 statistics. The dependency-free `model/forecasting.py` adapter uses a
+chronological 60% train / 20% validation / 20% test split, compares a
+persistence baseline with the existing project's explainable stump-boosting
+approach, and reports MAE, RMSE, and R² on the test segment. These metrics are
+development-only and do not establish real-world or production accuracy.
+
+Invalid, future, stale, negative, non-numeric, physically implausible, or
+insufficient data fails validation. If history or the model artifact is not
+safe to use, the dashboard labels the result `FALLBACK` and keeps the
+deterministic demo behavior. The PM2.5 `285` critical judge scenario remains
+deterministic and is labeled `SIMULATED DEMO`; it never depends on model output
+and cannot be downgraded by a missing or low-confidence prediction.
+
 ## Start locally
 
 From the repository root:

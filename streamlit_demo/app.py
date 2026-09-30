@@ -6,12 +6,24 @@ import csv
 import io
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import requests
 import streamlit as st
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from model.forecasting import (  # noqa: E402
+    ForecastDataError,
+    create_synthetic_history,
+    forecast_three_hours,
+    train_development_forecaster,
+)
 
 
 DEMO_MODE = os.getenv("SMARTBREATH_DEMO_MODE", "public").strip().lower()
@@ -131,6 +143,35 @@ def forecast_for(level: str, current_pm25: int) -> list[dict[str, Any]]:
             for label, value in zip(("Current", "+1 hour", "+2 hours", "+3 hours"), values)]
 
 
+def fallback_forecast(level: str, current_pm25: int) -> list[dict[str, Any]]:
+    return [
+        {**item, "modelName": "deterministic-demo-fallback", "dataStatus": "FALLBACK"}
+        for item in forecast_for(level, current_pm25)
+    ]
+
+
+def build_development_forecast(reading: dict[str, Any], history: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    try:
+        trained = train_development_forecaster(history)
+        return forecast_three_hours(reading, history, trained), {
+            "modelName": trained["model"].model_name,
+            "baselineMetrics": trained["baselineMetrics"],
+            "modelMetrics": trained["modelMetrics"],
+            "split": trained["split"],
+            "dataStatus": trained["dataStatus"],
+            "limitations": trained["limitations"],
+        }
+    except ForecastDataError as error:
+        return fallback_forecast(risk_label(None, reading), int(reading.get("pm25", 0))), {
+            "modelName": "deterministic-demo-fallback",
+            "baselineMetrics": None,
+            "modelMetrics": None,
+            "split": None,
+            "dataStatus": "FALLBACK",
+            "limitations": f"Forecast fallback: {error}",
+        }
+
+
 def simulated_demo_response(school_id: str, level: str) -> dict[str, Any]:
     timestamp = now_iso()
     reading = scenario_reading(school_id, level, timestamp)
@@ -234,7 +275,11 @@ def load_local_state(school_id: str) -> None:
         state["audit"] = backend_request("GET", f"/api/schools/{school_id}/audit", school_id)
         readings = backend_request("GET", f"/api/schools/{school_id}/readings", school_id)
         if readings:
+            state["history"] = readings[:-1]
             state["reading"] = readings[-1]
+            state["forecast"], state["model_info"] = build_development_forecast(
+                state["reading"], state["history"]
+            )
     except requests.RequestException as error:
         state["backend_error"] = str(error)
 
@@ -250,6 +295,8 @@ def initialize_state() -> None:
         "alerts": [],
         "recommendations": [],
         "forecast": [],
+        "history": [],
+        "model_info": {},
         "demo_response": None,
         "health": None,
         "backend_error": None,
@@ -262,9 +309,12 @@ def initialize_state() -> None:
         return
     if DEMO_MODE == "public":
         st.session_state["health"] = {"status": "ok", "service": "public-demo"}
+        st.session_state["history"] = create_synthetic_history(school_id=st.session_state["school_id"])
         st.session_state["reading"] = scenario_reading(st.session_state["school_id"], "NORMAL")
         st.session_state["recommendations"] = SIMULATED_RECOMMENDATIONS
-        st.session_state["forecast"] = forecast_for("NORMAL", 18)
+        st.session_state["forecast"], st.session_state["model_info"] = build_development_forecast(
+            st.session_state["reading"], st.session_state["history"]
+        )
     else:
         load_local_state(st.session_state["school_id"])
 
@@ -275,7 +325,20 @@ def apply_simulated_scenario(level: str) -> None:
     st.session_state["reading"] = response["reading"]
     st.session_state["risk"] = response["risk"]
     st.session_state["recommendations"] = response["recommendations"]
-    st.session_state["forecast"] = forecast_for(level, response["reading"]["pm25"])
+    if level == "CRITICAL":
+        st.session_state["forecast"] = fallback_forecast(level, response["reading"]["pm25"])
+        st.session_state["model_info"] = {
+            "modelName": "deterministic-demo-fallback",
+            "baselineMetrics": None,
+            "modelMetrics": None,
+            "split": None,
+            "dataStatus": "SIMULATED DEMO",
+            "limitations": "Critical judge scenario remains deterministic and is not altered by model output.",
+        }
+    else:
+        st.session_state["forecast"], st.session_state["model_info"] = build_development_forecast(
+            response["reading"], st.session_state["history"]
+        )
     st.session_state["demo_response"] = response
     st.session_state["demo_error"] = None
     if level == "CRITICAL":
@@ -303,7 +366,16 @@ def run_critical_demo() -> None:
         st.session_state["risk"] = result.get("risk")
         st.session_state["alert"] = result.get("alert")
         st.session_state["demo_response"] = result
-        st.session_state["forecast"] = forecast_for("CRITICAL", result["reading"]["pm25"])
+        st.session_state["forecast"] = fallback_forecast("CRITICAL", result["reading"]["pm25"])
+        st.session_state["model_info"] = {
+            "modelName": "deterministic-demo-fallback",
+            "baselineMetrics": None,
+            "modelMetrics": None,
+            "split": None,
+            "dataStatus": "SIMULATED DEMO",
+            "limitations": "Critical judge scenario remains deterministic and is not altered by model output.",
+        }
+        st.session_state["history"] = st.session_state.get("history", [])
         st.session_state["recommendations"] = [
             {"priority": "Action", "title": item, "detail": "Configured protective action."}
             for item in result["alert"].get("recommendedActions", [])
@@ -454,18 +526,48 @@ if st.session_state["demo_error"]:
 
 st.header("3-Hour PM2.5 Forecast")
 forecast = st.session_state.get("forecast") or forecast_for(current_risk, reading.get("pm25", 0))
-st.caption("SIMULATED DEMO • Forecast values are deterministic presentation data; no deployed ML accuracy is claimed.")
+model_info = st.session_state.get("model_info", {})
+st.caption(
+    f"Result status: **{model_info.get('dataStatus', 'FALLBACK')}** • "
+    f"Model: **{model_info.get('modelName', 'not available')}**"
+)
 forecast_columns = st.columns(4)
 for column, item in zip(forecast_columns, forecast):
     with column:
         st.metric(item["horizon"], f"{item['pm25']} µg/m³")
 
 st.header("Air Quality Trends")
-chart_rows = [{"PM2.5": item["pm25"], "PM10": reading.get("pm10", 0) if item["horizon"] == "Current"
-               else round(reading.get("pm10", 0) * item["pm25"] / max(reading.get("pm25", 1), 1)),
-               "Predicted PM2.5": item["pm25"]} for item in forecast]
-st.caption("SIMULATED DEMO • Trend history and predicted values are not real sensor measurements.")
-st.line_chart(chart_rows, x=None, y=["PM2.5", "PM10", "Predicted PM2.5"])
+history = st.session_state.get("history", [])
+chart_rows = [
+    {"PM2.5": item.get("pm25"), "PM10": item.get("pm10"), "Predicted PM2.5": None}
+    for item in history[-24:]
+]
+chart_rows.append({"PM2.5": reading.get("pm25"), "PM10": reading.get("pm10"), "Predicted PM2.5": reading.get("pm25")})
+chart_rows.extend(
+    {"PM2.5": None, "PM10": None, "Predicted PM2.5": item["pm25"]}
+    for item in forecast[1:]
+)
+st.caption(
+    f"Historical source: **{model_info.get('dataStatus', 'FALLBACK')}**. "
+    "Predictions are development/demo outputs and are not real sensor measurements."
+)
+st.line_chart(chart_rows, y=["PM2.5", "PM10", "Predicted PM2.5"])
+
+if model_info.get("modelMetrics"):
+    st.subheader("Model evaluation")
+    metric_columns = st.columns(3)
+    for column, metric_name in zip(metric_columns, ("mae", "rmse", "r2")):
+        with column:
+            st.metric(f"Test {metric_name.upper()}", model_info["modelMetrics"][metric_name])
+    st.caption(
+        f"Chronological split • train {model_info['split']['train']}, "
+        f"validation {model_info['split']['validation']}, test {model_info['split']['test']}. "
+        "Metrics are development-only and not production accuracy."
+    )
+    with st.expander("Baseline comparison"):
+        st.write({"persistence-baseline": model_info["baselineMetrics"], "model": model_info["modelMetrics"]})
+else:
+    st.warning(f"Model unavailable: {model_info.get('limitations', 'Using safe fallback output.')}")
 
 st.header("Air Quality Risk Assessment")
 risk_column, summary_column = st.columns([1, 2])
