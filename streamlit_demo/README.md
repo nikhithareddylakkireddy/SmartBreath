@@ -21,6 +21,12 @@ export. Raw reading/risk/alert payloads are hidden inside the collapsed
 **Developer Diagnostics** expander. These are presentation features over the
 existing contracts; the Streamlit app does not replace the backend risk engine.
 
+The **Demo Control Center** is in the main page content rather than only in the
+sidebar. It provides large START LIVE SIMULATION, STOP SIMULATION, ADVANCE TICK,
+scenario, and **SIMULATE CRITICAL EVENT** controls. Simulation remains bounded
+and user-driven; no background loop is created. The sidebar is reserved for
+school and sensor context.
+
 ## Phase 14 simulated sensor network
 
 Public mode includes three fictional demo schools and multiple deterministic
@@ -100,7 +106,7 @@ backend is intentionally provided. The public app has no dependency on
 
 1. Open the app and leave it on the Command Center.
 2. Select **Greenfield Academy** and sensor **GF-01**.
-3. In **Judge Demo Control**, click **CRITICAL** or **Run Severe Air Quality Demo**.
+3. In **Demo Control Center**, click **CRITICAL** or **SIMULATE CRITICAL EVENT**.
 4. Show PM2.5 `285 µg/m³`, `CRITICAL`, the **ACTION NEEDED** explanation,
    protective recommendations, and the three-hour forecast.
 5. Show the operational alert, `LOCAL_MOCK` notification, and alert timeline.

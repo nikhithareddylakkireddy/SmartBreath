@@ -383,6 +383,7 @@ def initialize_state() -> None:
         "backend_error": None,
         "demo_error": None,
         "ack_error": None,
+        "action_feedback": None,
         "network_readings": {},
         "network_history": {},
         "network_scenarios": {},
@@ -415,12 +416,13 @@ def apply_simulated_scenario(level: str) -> None:
         response["alert"]["sensorId"] = sensor_id
     st.session_state["scenario"] = level
     st.session_state["reading"] = response["reading"]
-    st.session_state["network_readings"][(school_id, sensor_id)] = response["reading"]
-    st.session_state["network_scenarios"][school_id] = level
-    st.session_state["network_history"][(school_id, sensor_id)] = (
-        st.session_state["network_history"].get((school_id, sensor_id), []) + [response["reading"]]
-    )[-96:]
-    st.session_state["history"] = st.session_state["network_history"][(school_id, sensor_id)]
+    if DEMO_MODE == "public":
+        st.session_state["network_readings"][(school_id, sensor_id)] = response["reading"]
+        st.session_state["network_scenarios"][school_id] = level
+        st.session_state["network_history"][(school_id, sensor_id)] = (
+            st.session_state["network_history"].get((school_id, sensor_id), []) + [response["reading"]]
+        )[-96:]
+        st.session_state["history"] = st.session_state["network_history"][(school_id, sensor_id)]
     st.session_state["risk"] = response["risk"]
     st.session_state["recommendations"] = response["recommendations"]
     if level == "CRITICAL":
@@ -588,21 +590,6 @@ if DEMO_MODE == "public":
         select_public_sensor(school_id, selected_sensor)
         st.rerun()
     st.sidebar.caption("SIMULATED SENSOR • deterministic demo readings")
-    live_start, live_stop = st.sidebar.columns(2)
-    if live_start.button("Start Live Simulation", use_container_width=True):
-        st.session_state["live_running"] = True
-        advance_live_tick()
-        st.rerun()
-    if live_stop.button("STOP SIMULATION", use_container_width=True):
-        st.session_state["live_running"] = False
-        st.rerun()
-    if st.sidebar.button("Advance tick", use_container_width=True):
-        advance_live_tick()
-        st.rerun()
-    st.sidebar.caption(
-        f"Live simulation: **{'RUNNING' if st.session_state['live_running'] else 'STOPPED'}** "
-        f"• bounded manual ticks: {st.session_state['live_tick']}"
-    )
 
 st.sidebar.caption("Public mode is simulated and backend-free." if DEMO_MODE == "public"
                    else f"Local backend: {BACKEND_URL}")
@@ -660,6 +647,55 @@ for column, label, value in zip(
             unsafe_allow_html=True,
         )
 
+st.subheader("Demo Control Center")
+st.caption("SIMULATED DEMO • Use these presentation controls to demonstrate the complete safety workflow.")
+control_columns = st.columns(3)
+if control_columns[0].button("START LIVE SIMULATION", use_container_width=True):
+    st.session_state["live_running"] = True
+    if DEMO_MODE == "public":
+        advance_live_tick()
+    st.session_state["action_feedback"] = "Live simulation started."
+    st.rerun()
+if control_columns[1].button("STOP SIMULATION", use_container_width=True):
+    st.session_state["live_running"] = False
+    st.session_state["action_feedback"] = "Live simulation stopped."
+    st.rerun()
+if control_columns[2].button("ADVANCE TICK", use_container_width=True):
+    if DEMO_MODE == "public":
+        advance_live_tick()
+    st.session_state["action_feedback"] = "Simulation advanced by 1 tick."
+    st.rerun()
+
+status_symbol = "●" if st.session_state["live_running"] else "○"
+status_text = "RUNNING" if st.session_state["live_running"] else "STOPPED"
+status_columns = st.columns(4)
+status_columns[0].markdown(f"**Simulation status:** {status_symbol} {status_text}")
+status_columns[1].markdown(f"**Manual ticks:** {st.session_state['live_tick']}")
+status_columns[2].markdown(f"**Selected school:** {school_name(school_id)}")
+status_columns[3].markdown(f"**Selected sensor:** {st.session_state.get('sensor_id') or '—'}")
+if DEMO_MODE == "public":
+    st.caption("PUBLIC DEMO • SIMULATED DATA")
+if st.session_state.get("action_feedback"):
+    st.success(st.session_state["action_feedback"])
+
+scenario_columns = st.columns(4)
+for column, level in zip(scenario_columns, RISK_LEVELS):
+    with column:
+        if st.button(level, use_container_width=True, key=f"scenario-{level}"):
+            if level == "CRITICAL":
+                run_critical_demo()
+                st.session_state["action_feedback"] = "Critical demo event triggered: PM2.5 = 285 µg/m³."
+            else:
+                apply_simulated_scenario(level)
+                st.session_state["action_feedback"] = f"{level} simulated scenario selected."
+            st.rerun()
+if st.button("🚨 SIMULATE CRITICAL EVENT", type="primary", use_container_width=True):
+    run_critical_demo()
+    st.session_state["action_feedback"] = "Critical demo event triggered: PM2.5 = 285 µg/m³."
+    st.rerun()
+if st.session_state["demo_error"]:
+    st.error(f"Demo request failed: {st.session_state['demo_error']}")
+
 st.header("Air Quality")
 st.caption(
     f"School: **{school_name(school_id)}**  •  Sensor: **{reading.get('sensorId', 'not available')}** "
@@ -703,23 +739,6 @@ for overview_id, configuration in SCHOOL_BY_ID.items():
         "Simulated": True,
     })
 st.dataframe(overview, hide_index=True, use_container_width=True)
-
-st.header("Judge Demo Control")
-st.caption("Use one click to demonstrate: sensor event → AI forecast → risk → alert → protective action.")
-scenario_columns = st.columns(4)
-for column, level in zip(scenario_columns, RISK_LEVELS):
-    with column:
-        if st.button(level, use_container_width=True, key=f"scenario-{level}"):
-            if level == "CRITICAL":
-                run_critical_demo()
-            else:
-                apply_simulated_scenario(level)
-            st.rerun()
-if st.button("Run Severe Air Quality Demo", type="primary", use_container_width=True):
-    run_critical_demo()
-    st.rerun()
-if st.session_state["demo_error"]:
-    st.error(f"Demo request failed: {st.session_state['demo_error']}")
 
 if DEMO_MODE == "public":
     st.caption("SIMULATED SENSOR NETWORK • Controls are bounded and user-driven; no background process is running.")
