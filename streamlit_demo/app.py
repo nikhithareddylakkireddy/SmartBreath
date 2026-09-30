@@ -35,10 +35,10 @@ REQUEST_TIMEOUT = 5
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "school-configurations.json"
 RISK_LEVELS = ("NORMAL", "ELEVATED", "HIGH", "CRITICAL")
 RISK_COLORS = {
-    "NORMAL": "🟢",
-    "ELEVATED": "🟡",
-    "HIGH": "🟠",
-    "CRITICAL": "🔴",
+    "NORMAL": "●",
+    "ELEVATED": "●",
+    "HIGH": "●",
+    "CRITICAL": "●",
 }
 SIMULATED_RECOMMENDATIONS = [
     {
@@ -64,6 +64,27 @@ SIMULATED_RECOMMENDATIONS = [
 ]
 
 st.set_page_config(page_title="Smart Breath | Advanced Demo", page_icon="🌬️", layout="wide")
+st.markdown(
+    """
+<style>
+.sb-eyebrow { color:#6b7a90; font-size:.78rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; }
+.sb-title { font-size:2.5rem; font-weight:800; letter-spacing:-.04em; margin:.1rem 0 0; }
+.sb-subtitle { color:#64748b; font-size:1.05rem; margin-bottom:.6rem; }
+.sb-status { color:#16805c; font-weight:700; letter-spacing:.08em; }
+.sb-demo { color:#9a6700; font-weight:700; letter-spacing:.06em; }
+.sb-card { border:1px solid #e2e8f0; border-radius:14px; padding:1rem 1.1rem; background:#fff; min-height:94px; }
+.sb-card-label { color:#64748b; font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.07em; }
+.sb-card-value { font-size:1.55rem; font-weight:800; margin-top:.3rem; }
+.sb-risk { border-radius:14px; padding:1rem 1.2rem; color:#fff; background:#9b1c31; }
+.sb-risk-normal { background:#16805c; }
+.sb-risk-elevated { background:#9a6700; }
+.sb-risk-high { background:#b54708; }
+.sb-action { border-left:5px solid #b54708; background:#fff7ed; padding:1rem 1.2rem; border-radius:10px; }
+.sb-muted { color:#64748b; font-size:.88rem; }
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 
 def now_iso() -> str:
@@ -394,6 +415,12 @@ def apply_simulated_scenario(level: str) -> None:
         response["alert"]["sensorId"] = sensor_id
     st.session_state["scenario"] = level
     st.session_state["reading"] = response["reading"]
+    st.session_state["network_readings"][(school_id, sensor_id)] = response["reading"]
+    st.session_state["network_scenarios"][school_id] = level
+    st.session_state["network_history"][(school_id, sensor_id)] = (
+        st.session_state["network_history"].get((school_id, sensor_id), []) + [response["reading"]]
+    )[-96:]
+    st.session_state["history"] = st.session_state["network_history"][(school_id, sensor_id)]
     st.session_state["risk"] = response["risk"]
     st.session_state["recommendations"] = response["recommendations"]
     if level == "CRITICAL":
@@ -592,21 +619,51 @@ risk = st.session_state.get("risk")
 alert = st.session_state.get("alert")
 current_risk = risk_label(risk, reading)
 
-st.title("🌬️ Smart Breath")
-st.subheader("School & Child Safe Air Early-Warning System")
-st.caption(f"{'PUBLIC SIMULATED DEMO' if DEMO_MODE == 'public' else 'LOCAL BACKEND DEMO'}  •  {school_name(school_id)}")
+st.markdown('<div class="sb-eyebrow">SMART BREATH</div>', unsafe_allow_html=True)
+st.markdown('<div class="sb-title">School & Child Safe Air Early-Warning System</div>', unsafe_allow_html=True)
+st.markdown(
+    f'<div class="sb-subtitle"><span class="sb-status">● SYSTEM LIVE</span>'
+    f' &nbsp; <span class="sb-demo">{"SIMULATED DATA" if DEMO_MODE == "public" else "LOCAL DEMO DATA"}</span></div>',
+    unsafe_allow_html=True,
+)
 if DEMO_MODE == "public":
-    st.info("SIMULATED DEMO • Readings, forecasts, alerts, audit events, and LOCAL_MOCK notifications are presentation data.")
+    st.info("SIMULATED DEMO DATA • Readings, forecasts, alerts, audit events, and LOCAL_MOCK notifications are presentation data.")
 elif st.session_state["backend_error"]:
     st.error("Backend unavailable. Start the existing backend, then refresh.")
-    st.code(st.session_state["backend_error"])
 else:
     st.success("Backend connected • local authenticated demo mode")
 
-st.header("Current Air Quality")
+network_readings = st.session_state.get("network_readings", {})
+network_schools = list(SCHOOL_BY_ID)
+online_sensor_count = sum(len(sensor_ids(configuration)) for configuration in SCHOOL_BY_ID.values())
+active_alert_count = len(st.session_state.get("alerts", []))
+critical_school_count = 0
+if DEMO_MODE == "public":
+    for overview_id, configuration in SCHOOL_BY_ID.items():
+        primary = network_readings.get((overview_id, sensor_ids(configuration)[0]), {})
+        if risk_label(None, primary) == "CRITICAL":
+            critical_school_count += 1
+else:
+    critical_school_count = int(current_risk == "CRITICAL")
+
+st.subheader("Command Center")
+kpi_columns = st.columns(4)
+for column, label, value in zip(
+    kpi_columns,
+    ("Schools monitored", "Sensors online", "Active alerts", "Critical schools"),
+    (len(network_schools), online_sensor_count, active_alert_count, critical_school_count),
+):
+    with column:
+        st.markdown(
+            f'<div class="sb-card"><div class="sb-card-label">{label}</div>'
+            f'<div class="sb-card-value">{value}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+st.header("Air Quality")
 st.caption(
     f"School: **{school_name(school_id)}**  •  Sensor: **{reading.get('sensorId', 'not available')}** "
-    "•  Sensor status: **SIMULATED SENSOR**"
+    f"•  Sensor status: **{'SIMULATED SENSOR' if DEMO_MODE == 'public' else 'LOCAL BACKEND'}**"
 )
 metric_columns = st.columns(5)
 for column, (label, key, unit) in zip(
@@ -617,11 +674,15 @@ for column, (label, key, unit) in zip(
 ):
     with column:
         st.metric(label, f"{reading.get(key, '—')} {unit}")
-st.markdown(f"### {RISK_COLORS.get(current_risk, '⚪')} Current risk: {current_risk}")
+st.markdown(
+    f'<div class="sb-risk sb-risk-{current_risk.lower()}"><div class="sb-card-label" style="color:#fff">AIR QUALITY STATUS</div>'
+    f'<div style="font-size:1.8rem;font-weight:800">{RISK_COLORS.get(current_risk, "●")} {current_risk}</div></div>',
+    unsafe_allow_html=True,
+)
 st.caption(f"Last updated: {reading.get('timestamp', 'not available')}")
 
-st.header("School Network Overview")
-st.caption("SIMULATED DEMO • This comparison is not a ranking of real-world school safety.")
+st.header("School Network")
+st.caption("SIMULATED DEMO DATA • Fictional schools and deterministic sensor readings for demonstration only.")
 overview = []
 for overview_id, configuration in SCHOOL_BY_ID.items():
     if DEMO_MODE == "public":
@@ -643,8 +704,8 @@ for overview_id, configuration in SCHOOL_BY_ID.items():
     })
 st.dataframe(overview, hide_index=True, use_container_width=True)
 
-st.header("Demo Sensor Simulator")
-st.caption("SIMULATED DEMO • This control is not a real sensor.")
+st.header("Judge Demo Control")
+st.caption("Use one click to demonstrate: sensor event → AI forecast → risk → alert → protective action.")
 scenario_columns = st.columns(4)
 for column, level in zip(scenario_columns, RISK_LEVELS):
     with column:
@@ -660,7 +721,10 @@ if st.button("Run Severe Air Quality Demo", type="primary", use_container_width=
 if st.session_state["demo_error"]:
     st.error(f"Demo request failed: {st.session_state['demo_error']}")
 
-st.header("3-Hour PM2.5 Forecast")
+if DEMO_MODE == "public":
+    st.caption("SIMULATED SENSOR NETWORK • Controls are bounded and user-driven; no background process is running.")
+
+st.header("AI Air-Quality Forecast")
 forecast = st.session_state.get("forecast") or forecast_for(current_risk, reading.get("pm25", 0))
 model_info = st.session_state.get("model_info", {})
 st.caption(
@@ -671,6 +735,7 @@ forecast_columns = st.columns(4)
 for column, item in zip(forecast_columns, forecast):
     with column:
         st.metric(item["horizon"], f"{item['pm25']} µg/m³")
+st.caption("Forecast generated using the Smart Breath time-series forecasting pipeline. Metrics are development-only.")
 
 st.header("Air Quality Trends")
 history = st.session_state.get("history", [])
@@ -705,6 +770,18 @@ if model_info.get("modelMetrics"):
 else:
     st.warning(f"Model unavailable: {model_info.get('limitations', 'Using safe fallback output.')}")
 
+st.header("Why is the system warning us?")
+risk_reason = (risk or {}).get("reason", "Monitoring state is based on the selected scenario.")
+if current_risk in {"HIGH", "CRITICAL"}:
+    st.markdown(
+        f'<div class="sb-action"><strong>Current PM2.5 is {current_risk.lower()}.</strong><br>'
+        "The forecasting layer indicates continued particulate exposure over the next few hours. "
+        "The risk engine recommends reducing children's outdoor exposure and activating school protective protocols.</div>",
+        unsafe_allow_html=True,
+    )
+else:
+    st.info("Current air quality is within the selected monitoring state. Continue routine child-sensitive monitoring.")
+
 st.header("Air Quality Risk Assessment")
 risk_column, summary_column = st.columns([1, 2])
 with risk_column:
@@ -712,53 +789,87 @@ with risk_column:
     st.write(f"Child-sensitive monitoring: **{'ACTIVE' if school.get('protectiveActions', {}).get('childSensitiveMode', True) else 'CONFIGURED'}**")
 with summary_column:
     st.write(f"Forecast trend: **{forecast[0]['pm25']} → {forecast[-1]['pm25']} µg/m³** over 3 hours")
-    st.write((risk or {}).get("reason", "Monitoring state is based on the selected simulated scenario."))
+    st.write(risk_reason)
     st.markdown("**Recommended protective actions**")
     for item in st.session_state.get("recommendations", SIMULATED_RECOMMENDATIONS):
         st.write(f"- **{item.get('priority', 'Action')}** — {item.get('title', '')}")
         if item.get("detail"):
             st.caption(item["detail"])
 
+st.header("Live Sensor Status")
+sensor_rows = []
+for sensor in available_sensors:
+    sensor_reading = network_readings.get((school_id, sensor), reading if sensor == reading.get("sensorId") else {})
+    sensor_rows.append({
+        "Sensor": sensor,
+        "Status": "ONLINE",
+        "Latest PM2.5": sensor_reading.get("pm25", "—"),
+        "Last update": sensor_reading.get("timestamp", "—"),
+        "Data source": "SIMULATED SENSOR" if DEMO_MODE == "public" else "LOCAL BACKEND",
+    })
+st.dataframe(sensor_rows, hide_index=True, use_container_width=True)
+
 if alert:
-    st.header("Operational Alert Center")
+    st.header("Alerts & Audit")
+    st.subheader("Operational Alert Center")
     st.warning(f"{RISK_COLORS['CRITICAL']} Severity: **{alert.get('severity', '').upper()}** • Status: **{alert.get('status', '')}**")
-    st.write(alert.get("message", ""))
+    st.write(f"{school_name(alert.get('schoolId', school_id))} • Sensor {alert.get('sensorId', reading.get('sensorId', '—'))}")
+    st.write("PM2.5 exceeded the configured critical condition. Follow the institution's protective-action plan.")
     alert_columns = st.columns(3)
     alert_columns[0].metric("PM2.5", f"{alert.get('currentValue', '—')} µg/m³")
     alert_columns[1].metric("Notification", "SIMULATED")
     alert_columns[2].metric("Acknowledgement", "YES" if alert.get("status") == "ACKNOWLEDGED" else "PENDING")
-    st.caption(f"LOCAL_MOCK notification • Created: {alert.get('createdAt', 'not available')}")
+    st.caption(f"Notification: LOCAL_MOCK • Created: {alert.get('createdAt', 'not available')}")
     lifecycle = ["CREATED", "QUEUED", "DELIVERY_ATTEMPTED", "DELIVERED", "ACKNOWLEDGED"]
     current_index = lifecycle.index(alert["status"]) if alert.get("status") in lifecycle else -1
-    st.write(" → ".join(f"**{item}**" if index <= current_index else item for index, item in enumerate(lifecycle)))
+    st.write("  \n↓  \n".join(f"**{item.replace('_', ' ')}**" if index <= current_index else item.replace("_", " ") for index, item in enumerate(lifecycle)))
     if alert.get("status") == "DELIVERED" and st.button("Acknowledge alert"):
         acknowledge_alert()
         st.rerun()
     if st.session_state["ack_error"]:
         st.error(f"Acknowledgement failed: {st.session_state['ack_error']}")
 
-st.header("Audit Timeline")
+st.subheader("Alert Timeline")
 audit_events = st.session_state.get("audit", [])
 if audit_events:
+    st.caption("Reading received → Risk evaluated → Alert created → Notification queued → Delivered → Acknowledged")
     for event in reversed(audit_events[-10:]):
-        st.write(f"**{event.get('eventType', 'event')}**  •  {event.get('timestamp', '')}  •  {'SIMULATED' if event.get('simulated', True) else 'LOCAL'}")
+        label = event.get("eventType", "event").replace(".", " ").replace("_", " ").title()
+        st.write(f"**{label}**  •  {event.get('timestamp', '')}  •  {'SIMULATED' if event.get('simulated', True) else 'LOCAL'}")
 else:
     st.caption("No alert lifecycle events yet. Select a simulator state or run the critical demo.")
 
-st.header("Reports")
+st.header("Reports & Export")
 st.download_button(
     "Download Air Quality Report",
     data=report_csv(reading, forecast, school_id),
     file_name=f"smartbreath-{school_id}-air-quality.csv",
     mime="text/csv",
 )
-if st.session_state.get("demo_response"):
-    with st.expander("Actual demo response"):
-        st.json(st.session_state["demo_response"])
+
+with st.expander("Developer Diagnostics"):
+    st.caption("Technical details are hidden from the normal presentation view.")
+    st.subheader("Raw reading")
+    st.json(reading)
+    st.subheader("Raw risk")
+    st.json(risk or {})
+    st.subheader("Raw alert")
+    st.json(alert or {})
+    st.subheader("Backend/demo response")
+    st.json(st.session_state.get("demo_response") or {})
+    st.subheader("Simulator state")
+    st.json({
+        "mode": DEMO_MODE,
+        "schoolId": school_id,
+        "sensorId": reading.get("sensorId"),
+        "scenario": st.session_state.get("scenario"),
+        "liveRunning": st.session_state.get("live_running"),
+        "liveTick": st.session_state.get("live_tick"),
+        "modelInfo": model_info,
+    })
 
 st.divider()
 st.info(
-    "Safety notice: this dashboard uses simulated demo data and LOCAL_MOCK notifications. "
-    "It is not a medical diagnostic system, does not provide treatment advice, and "
-    "does not autonomously dispatch police, ambulance, hospitals, or emergency services."
+    "Safety notice: Smart Breath provides air-quality monitoring and protective-action recommendations. "
+    "It is not a medical diagnostic or emergency dispatch system. No real contacts or emergency services are used."
 )

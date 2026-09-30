@@ -14,12 +14,12 @@ The app has two explicit modes:
   `http://localhost:3000` and the real
   `POST /api/schools/greenfield/demo/severe-pm25` endpoint.
 
-The dashboard includes the configured school selector, current air-quality
-metrics, deterministic three-hour simulated forecast, clearly labeled trend
-charts, child-sensitive risk summary, protective actions, sensor scenario
-buttons, operational alert lifecycle, audit timeline, and a CSV report
-download. These are presentation features over the existing contracts; the
-Streamlit app does not replace the backend risk engine.
+The dashboard opens on a judge-friendly Command Center with live status KPIs,
+school network context, selected-school air quality, the explainable forecast,
+protective actions, sensor status, alert lifecycle, audit timeline, and report
+export. Raw reading/risk/alert payloads are hidden inside the collapsed
+**Developer Diagnostics** expander. These are presentation features over the
+existing contracts; the Streamlit app does not replace the backend risk engine.
 
 ## Phase 14 simulated sensor network
 
@@ -96,14 +96,16 @@ Public mode must remain enabled on Community Cloud. Do not set
 backend is intentionally provided. The public app has no dependency on
 `localhost:3000`.
 
-## Demo sequence
+## Final hackathon demo sequence
 
-1. Confirm the backend health connection is shown.
-2. Click **Run Severe Air Quality Demo**.
-3. Verify the backend response displays PM2.5 `285`, `CRITICAL` risk, a
-   simulated notification, protective recommendations, and the alert lifecycle.
-4. Review the audit events.
-5. Acknowledge the delivered alert when demonstrating the lifecycle.
+1. Open the app and leave it on the Command Center.
+2. Select **Greenfield Academy** and sensor **GF-01**.
+3. In **Judge Demo Control**, click **CRITICAL** or **Run Severe Air Quality Demo**.
+4. Show PM2.5 `285 µg/m³`, `CRITICAL`, the **ACTION NEEDED** explanation,
+   protective recommendations, and the three-hour forecast.
+5. Show the operational alert, `LOCAL_MOCK` notification, and alert timeline.
+6. Click **Acknowledge alert** and show the `ACKNOWLEDGED` status.
+7. If technical details are requested, expand **Developer Diagnostics** only then.
 
 The **Demo Sensor Simulator** has NORMAL, ELEVATED, HIGH, and CRITICAL
 controls. CRITICAL uses the existing deterministic PM2.5 `285` scenario.
