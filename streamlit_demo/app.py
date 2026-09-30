@@ -1,14 +1,13 @@
-"""Local Streamlit demonstration client for Smart Breath.
-
-This app is intentionally a thin UI over the existing local backend. It does
-not implement risk evaluation, alert transitions, or notification delivery.
-"""
+"""Smart Breath's additional local/public Streamlit demonstration dashboard."""
 
 from __future__ import annotations
 
-import os
+import csv
+import io
 import json
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -19,42 +18,82 @@ DEMO_MODE = os.getenv("SMARTBREATH_DEMO_MODE", "public").strip().lower()
 if DEMO_MODE not in {"public", "local"}:
     DEMO_MODE = "public"
 BACKEND_URL = os.getenv("SMARTBREATH_BACKEND_URL", "http://localhost:3000").rstrip("/")
-SCHOOL_ID = os.getenv("SMARTBREATH_SCHOOL_ID", "greenfield")
-LOCAL_USER = {
-    "sub": os.getenv("SMARTBREATH_LOCAL_SUB", "local-admin"),
-    "schoolId": SCHOOL_ID,
-    "groups": ["school-administrator"],
-}
 REQUEST_TIMEOUT = 5
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "data" / "school-configurations.json"
+RISK_LEVELS = ("NORMAL", "ELEVATED", "HIGH", "CRITICAL")
+RISK_COLORS = {
+    "NORMAL": "🟢",
+    "ELEVATED": "🟡",
+    "HIGH": "🟠",
+    "CRITICAL": "🔴",
+}
+SCENARIOS = {
+    "NORMAL": {"pm25": 18, "pm10": 31, "temperature": 26, "humidity": 58, "windSpeed": 2},
+    "ELEVATED": {"pm25": 42, "pm10": 64, "temperature": 27, "humidity": 60, "windSpeed": 2},
+    "HIGH": {"pm25": 82, "pm10": 118, "temperature": 28, "humidity": 63, "windSpeed": 3},
+    "CRITICAL": {"pm25": 285, "pm10": 340, "temperature": 29, "humidity": 67, "windSpeed": 3},
+}
 SIMULATED_RECOMMENDATIONS = [
     {
         "priority": "High",
-        "title": "Keep children indoors and suspend outdoor activities.",
-        "detail": "Follow the configured school protective-action plan.",
+        "title": "Shift outdoor activities indoors",
+        "detail": "Move recess and physical activity indoors while air quality is elevated.",
     },
     {
         "priority": "High",
-        "title": "Activate filtered ventilation.",
+        "title": "Activate filtered ventilation windows",
         "detail": "Keep filtration systems running during the simulated event.",
     },
     {
         "priority": "Medium",
-        "title": "Notify school communication channels.",
-        "detail": "Use institution-approved communication procedures.",
+        "title": "Notify parent communication channels",
+        "detail": "Use institution-approved communication procedures only.",
+    },
+    {
+        "priority": "Medium",
+        "title": "Review bus-idling protocols",
+        "detail": "Reduce concentrated pollution around school entrances.",
     },
 ]
 
-st.set_page_config(
-    page_title="Smart Breath | Local Demo",
-    page_icon="🌬️",
-    layout="wide",
-)
+st.set_page_config(page_title="Smart Breath | Advanced Demo", page_icon="🌬️", layout="wide")
 
 
-def backend_request(method: str, path: str, **kwargs: Any) -> Any:
-    """Call the existing backend and raise a useful local-demo error."""
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def load_school_configurations() -> list[dict[str, Any]]:
+    try:
+        with CONFIG_PATH.open(encoding="utf-8") as config_file:
+            configurations = json.load(config_file)
+        return configurations if isinstance(configurations, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+SCHOOL_CONFIGURATIONS = load_school_configurations()
+SCHOOL_BY_ID = {item.get("schoolId"): item for item in SCHOOL_CONFIGURATIONS}
+DEFAULT_SCHOOL_ID = os.getenv("SMARTBREATH_SCHOOL_ID", "greenfield")
+if DEFAULT_SCHOOL_ID not in SCHOOL_BY_ID and SCHOOL_BY_ID:
+    DEFAULT_SCHOOL_ID = next(iter(SCHOOL_BY_ID))
+
+
+def school_name(school_id: str) -> str:
+    return SCHOOL_BY_ID.get(school_id, {}).get("schoolName", school_id.replace("-", " ").title())
+
+
+def local_user(school_id: str) -> dict[str, Any]:
+    return {
+        "sub": os.getenv("SMARTBREATH_LOCAL_SUB", "local-admin"),
+        "schoolId": school_id,
+        "groups": ["school-administrator"],
+    }
+
+
+def backend_request(method: str, path: str, school_id: str, **kwargs: Any) -> Any:
     headers = kwargs.pop("headers", {})
-    headers["x-local-user"] = json.dumps(LOCAL_USER)
+    headers["x-local-user"] = json.dumps(local_user(school_id))
     response = requests.request(
         method,
         f"{BACKEND_URL}{path}",
@@ -66,118 +105,134 @@ def backend_request(method: str, path: str, **kwargs: Any) -> Any:
     return response.json()
 
 
-def simulated_demo_response() -> dict[str, Any]:
-    """Return a fixed public-demo payload; no risk calculation is performed here."""
-    timestamp = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    alert_id = "public-demo-alert-greenfield-285"
+def scenario_reading(school_id: str, level: str, timestamp: str | None = None) -> dict[str, Any]:
+    values = SCENARIOS[level]
     return {
-        "reading": {
-            "schoolId": SCHOOL_ID,
-            "sensorId": "public-demo-sensor-001",
-            "timestamp": timestamp,
-            "pm25": 285,
-            "pm10": 340,
-            "temperature": 29,
-            "humidity": 67,
-            "windSpeed": 3,
-            "windDirection": 180,
-            "dataSource": "streamlit-public-demo",
+        "schoolId": school_id,
+        "sensorId": "streamlit-demo-sensor-001",
+        "timestamp": timestamp or now_iso(),
+        **values,
+        "windDirection": 180,
+        "dataSource": "streamlit-public-demo",
+        "simulated": True,
+    }
+
+
+def forecast_for(level: str, current_pm25: int) -> list[dict[str, Any]]:
+    if level == "CRITICAL":
+        values = [current_pm25, 280, 265, 240]
+    elif level == "HIGH":
+        values = [current_pm25, 78, 73, 68]
+    elif level == "ELEVATED":
+        values = [current_pm25, 40, 38, 35]
+    else:
+        values = [current_pm25, 17, 16, 16]
+    return [{"horizon": label, "pm25": value, "simulated": True}
+            for label, value in zip(("Current", "+1 hour", "+2 hours", "+3 hours"), values)]
+
+
+def simulated_demo_response(school_id: str, level: str) -> dict[str, Any]:
+    timestamp = now_iso()
+    reading = scenario_reading(school_id, level, timestamp)
+    if level != "CRITICAL":
+        return {
+            "reading": reading,
+            "risk": {
+                "schoolId": school_id,
+                "currentRisk": level.lower(),
+                "predictedRisk": level.lower(),
+                "severity": level.lower(),
+                "reason": f"SIMULATED DEMO scenario selected: {level} monitoring state.",
+                "confidence": 1,
+                "policyVersion": "streamlit-demo",
+                "evaluatedAt": timestamp,
+                "simulated": True,
+            },
+            "recommendations": SIMULATED_RECOMMENDATIONS,
             "simulated": True,
-        },
+        }
+
+    alert_id = f"public-demo-alert-{school_id}-285"
+    alert = {
+        "alertId": alert_id,
+        "schoolId": school_id,
+        "severity": "critical",
+        "pollutant": "PM2.5",
+        "currentValue": 285,
+        "threshold": 150,
+        "message": "[SIMULATED DEMO] Critical air-quality scenario. Follow the school protective-action plan.",
+        "recommendedActions": [item["title"] for item in SIMULATED_RECOMMENDATIONS],
+        "status": "DELIVERED",
+        "createdAt": timestamp,
+        "queuedAt": timestamp,
+        "deliveryAttemptedAt": timestamp,
+        "deliveredAt": timestamp,
+        "acknowledgedAt": None,
+        "simulated": True,
+    }
+    return {
+        "reading": reading,
         "risk": {
-            "schoolId": SCHOOL_ID,
+            "schoolId": school_id,
             "currentRisk": "critical",
             "predictedRisk": "critical",
             "severity": "critical",
-            "reason": "Public demo scenario: PM2.5 is 285, so the configured scenario is critical.",
+            "reason": "SIMULATED DEMO scenario: PM2.5 is 285 and the school policy marks this as critical.",
             "confidence": 1,
-            "policyVersion": "public-demo",
+            "policyVersion": "streamlit-demo",
             "evaluatedAt": timestamp,
             "simulated": True,
         },
-        "alert": {
-            "alertId": alert_id,
-            "schoolId": SCHOOL_ID,
-            "severity": "critical",
-            "pollutant": "PM2.5",
-            "currentValue": 285,
-            "threshold": 150,
-            "message": "[SIMULATED DEMO] Critical air-quality scenario. Follow the school protective-action plan.",
-            "recommendedActions": [
-                item["title"] for item in SIMULATED_RECOMMENDATIONS
-            ],
-            "status": "DELIVERED",
-            "createdAt": timestamp,
-            "queuedAt": timestamp,
-            "deliveryAttemptedAt": timestamp,
-            "deliveredAt": timestamp,
-            "acknowledgedAt": None,
-            "simulated": True,
-        },
-        "job": {
-            "alertId": alert_id,
-            "schoolId": SCHOOL_ID,
-            "simulated": True,
-            "localProviderMode": "LOCAL_MOCK",
-        },
+        "alert": alert,
+        "job": {"alertId": alert_id, "simulated": True, "localProviderMode": "LOCAL_MOCK"},
+        "recommendations": SIMULATED_RECOMMENDATIONS,
         "localProviderMode": "LOCAL_MOCK",
         "simulated": True,
     }
 
 
 def simulated_audit(alert: dict[str, Any]) -> list[dict[str, Any]]:
-    timestamp = alert.get("createdAt", datetime.now(timezone.utc).isoformat())
+    timestamp = alert.get("createdAt", now_iso())
     return [
         {
-            "eventId": f"public-demo-created-{alert['alertId']}",
-            "schoolId": SCHOOL_ID,
-            "eventType": "alert.created",
+            "eventId": f"streamlit-{status.lower()}-{alert['alertId']}",
+            "schoolId": alert["schoolId"],
+            "eventType": f"alert.{status.lower()}",
             "timestamp": timestamp,
             "actorSource": "streamlit-public-demo",
             "relatedAlertId": alert["alertId"],
-            "details": {"status": "CREATED"},
+            "details": {"status": status},
             "simulated": True,
-        },
-        {
-            "eventId": f"public-demo-queued-{alert['alertId']}",
-            "schoolId": SCHOOL_ID,
-            "eventType": "alert.queued",
-            "timestamp": timestamp,
-            "actorSource": "streamlit-public-demo",
-            "relatedAlertId": alert["alertId"],
-            "details": {"status": "QUEUED"},
-            "simulated": True,
-        },
-        {
-            "eventId": f"public-demo-delivered-{alert['alertId']}",
-            "schoolId": SCHOOL_ID,
-            "eventType": "alert.delivered",
-            "timestamp": timestamp,
-            "actorSource": "streamlit-public-demo",
-            "relatedAlertId": alert["alertId"],
-            "details": {"status": "DELIVERED", "notification": "LOCAL_MOCK"},
-            "simulated": True,
-        },
+        }
+        for status in ("created", "queued", "delivered")
     ]
 
 
-def load_backend_state() -> None:
-    """Refresh read-only dashboard state from the existing API."""
+def risk_label(risk: dict[str, Any] | None, reading: dict[str, Any] | None) -> str:
+    if risk and risk.get("currentRisk"):
+        return str(risk["currentRisk"]).upper()
+    if reading:
+        pm25 = reading.get("pm25", 0)
+        # Display-only fallback for a local reading when the backend has no risk record.
+        thresholds = SCHOOL_BY_ID.get(reading.get("schoolId"), {}).get("thresholds", {})
+        if pm25 >= thresholds.get("pm25Critical", 150):
+            return "CRITICAL"
+        if pm25 >= thresholds.get("pm25High", 55):
+            return "HIGH"
+        if pm25 >= thresholds.get("pm25Watch", 35):
+            return "ELEVATED"
+    return "NORMAL"
+
+
+def load_local_state(school_id: str) -> None:
     state = st.session_state
     state["backend_error"] = None
     try:
-        state["health"] = backend_request("GET", "/api/health")
-        state["dashboard"] = backend_request("GET", "/api/dashboard")
-        state["recommendations"] = backend_request("GET", "/api/recommendations")
-        state["alerts"] = backend_request(
-            "GET", f"/api/schools/{SCHOOL_ID}/alerts"
-        )
-        state["audit"] = backend_request(
-            "GET", f"/api/schools/{SCHOOL_ID}/audit"
-        )
-        readings = backend_request(
-            "GET", f"/api/schools/{SCHOOL_ID}/readings"
-        )
+        state["health"] = backend_request("GET", "/api/health", school_id)
+        state["recommendations"] = backend_request("GET", "/api/recommendations", school_id)
+        state["alerts"] = backend_request("GET", f"/api/schools/{school_id}/alerts", school_id)
+        state["audit"] = backend_request("GET", f"/api/schools/{school_id}/audit", school_id)
+        readings = backend_request("GET", f"/api/schools/{school_id}/readings", school_id)
         if readings:
             state["reading"] = readings[-1]
     except requests.RequestException as error:
@@ -186,15 +241,16 @@ def load_backend_state() -> None:
 
 def initialize_state() -> None:
     defaults = {
+        "school_id": DEFAULT_SCHOOL_ID,
+        "scenario": "NORMAL",
         "reading": None,
         "risk": None,
         "alert": None,
-        "job": None,
-        "demo_response": None,
         "audit": [],
         "alerts": [],
         "recommendations": [],
-        "dashboard": {},
+        "forecast": [],
+        "demo_response": None,
         "health": None,
         "backend_error": None,
         "demo_error": None,
@@ -202,72 +258,61 @@ def initialize_state() -> None:
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
-    if not st.session_state.get("health") and not st.session_state.get("backend_error"):
-        if DEMO_MODE == "public":
-            st.session_state["health"] = {"status": "ok", "service": "public-demo"}
-            st.session_state["reading"] = {
-                "schoolId": SCHOOL_ID,
-                "pm25": 18,
-                "pm10": 31,
-                "temperature": 26,
-                "humidity": 58,
-                "windSpeed": 2,
-                "simulated": True,
-            }
-            st.session_state["recommendations"] = SIMULATED_RECOMMENDATIONS
-        else:
-            load_backend_state()
+    if st.session_state["health"] is not None:
+        return
+    if DEMO_MODE == "public":
+        st.session_state["health"] = {"status": "ok", "service": "public-demo"}
+        st.session_state["reading"] = scenario_reading(st.session_state["school_id"], "NORMAL")
+        st.session_state["recommendations"] = SIMULATED_RECOMMENDATIONS
+        st.session_state["forecast"] = forecast_for("NORMAL", 18)
+    else:
+        load_local_state(st.session_state["school_id"])
 
 
-def risk_label(risk: dict[str, Any] | None, reading: dict[str, Any] | None) -> str:
-    if risk and risk.get("currentRisk"):
-        return str(risk["currentRisk"]).upper()
-    if reading and isinstance(reading.get("pm25"), (int, float)):
-        pm25 = reading["pm25"]
-        if pm25 >= 150:
-            return "CRITICAL"
-        if pm25 >= 75:
-            return "HIGH"
-        if pm25 >= 35:
-            return "ELEVATED"
-    return "NORMAL"
+def apply_simulated_scenario(level: str) -> None:
+    response = simulated_demo_response(st.session_state["school_id"], level)
+    st.session_state["scenario"] = level
+    st.session_state["reading"] = response["reading"]
+    st.session_state["risk"] = response["risk"]
+    st.session_state["recommendations"] = response["recommendations"]
+    st.session_state["forecast"] = forecast_for(level, response["reading"]["pm25"])
+    st.session_state["demo_response"] = response
+    st.session_state["demo_error"] = None
+    if level == "CRITICAL":
+        st.session_state["alert"] = response["alert"]
+        st.session_state["alerts"] = [response["alert"]]
+        st.session_state["audit"] = simulated_audit(response["alert"])
+    else:
+        st.session_state["alert"] = None
+        st.session_state["alerts"] = []
+        st.session_state["audit"] = []
 
 
-def metric_value(reading: dict[str, Any] | None, key: str, fallback: str = "—") -> Any:
-    if not reading or reading.get(key) is None:
-        return fallback
-    return reading[key]
-
-
-def run_demo() -> None:
+def run_critical_demo() -> None:
+    school_id = st.session_state["school_id"]
     st.session_state["demo_error"] = None
     if DEMO_MODE == "public":
-        result = simulated_demo_response()
-        st.session_state["reading"] = result["reading"]
-        st.session_state["risk"] = result["risk"]
-        st.session_state["alert"] = result["alert"]
-        st.session_state["job"] = result["job"]
-        st.session_state["demo_response"] = result
-        st.session_state["alerts"] = [result["alert"]]
-        st.session_state["audit"] = simulated_audit(result["alert"])
+        apply_simulated_scenario("CRITICAL")
         return
     try:
         result = backend_request(
-            "POST",
-            f"/api/schools/{SCHOOL_ID}/demo/severe-pm25",
-            json={},
+            "POST", f"/api/schools/{school_id}/demo/severe-pm25", school_id, json={}
         )
+        st.session_state["scenario"] = "CRITICAL"
         st.session_state["reading"] = result.get("reading")
         st.session_state["risk"] = result.get("risk")
         st.session_state["alert"] = result.get("alert")
-        st.session_state["job"] = result.get("job")
         st.session_state["demo_response"] = result
+        st.session_state["forecast"] = forecast_for("CRITICAL", result["reading"]["pm25"])
+        st.session_state["recommendations"] = [
+            {"priority": "Action", "title": item, "detail": "Configured protective action."}
+            for item in result["alert"].get("recommendedActions", [])
+        ]
         st.session_state["alerts"] = [result["alert"]]
         st.session_state["audit"] = backend_request(
-            "GET", f"/api/schools/{SCHOOL_ID}/audit"
+            "GET", f"/api/schools/{school_id}/audit", school_id
         )
-        st.session_state["demo_error"] = None
-    except requests.RequestException as error:
+    except (requests.RequestException, KeyError) as error:
         st.session_state["demo_error"] = str(error)
 
 
@@ -279,14 +324,14 @@ def acknowledge_alert() -> None:
     if DEMO_MODE == "public":
         updated = dict(alert)
         updated["status"] = "ACKNOWLEDGED"
-        updated["acknowledgedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        updated["acknowledgedAt"] = now_iso()
         st.session_state["alert"] = updated
         st.session_state["alerts"] = [updated]
         st.session_state["audit"] = [
-            *st.session_state.get("audit", []),
+            *st.session_state["audit"],
             {
-                "eventId": f"public-demo-acknowledged-{alert['alertId']}",
-                "schoolId": SCHOOL_ID,
+                "eventId": f"streamlit-acknowledged-{alert['alertId']}",
+                "schoolId": alert["schoolId"],
                 "eventType": "alert.acknowledged",
                 "timestamp": updated["acknowledgedAt"],
                 "actorSource": "streamlit-public-demo",
@@ -299,140 +344,183 @@ def acknowledge_alert() -> None:
     try:
         updated = backend_request(
             "POST",
-            f"/api/schools/{SCHOOL_ID}/alerts/{alert['alertId']}/acknowledge",
+            f"/api/schools/{alert['schoolId']}/alerts/{alert['alertId']}/acknowledge",
+            alert["schoolId"],
             json={},
         )
         st.session_state["alert"] = updated
         st.session_state["alerts"] = [updated]
         st.session_state["audit"] = backend_request(
-            "GET", f"/api/schools/{SCHOOL_ID}/audit"
+            "GET", f"/api/schools/{alert['schoolId']}/audit", alert["schoolId"]
         )
     except requests.RequestException as error:
         st.session_state["ack_error"] = str(error)
 
 
+def report_csv(reading: dict[str, Any], forecast: list[dict[str, Any]], school_id: str) -> bytes:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["school_id", "school_name", "record_type", "horizon", "pm25", "pm10",
+                     "temperature", "humidity", "wind_speed", "risk", "simulated", "timestamp"])
+    risk = risk_label(st.session_state.get("risk"), reading)
+    writer.writerow([
+        school_id, school_name(school_id), "reading", "Current", reading.get("pm25"),
+        reading.get("pm10"), reading.get("temperature"), reading.get("humidity"),
+        reading.get("windSpeed"), risk, reading.get("simulated", True), reading.get("timestamp", ""),
+    ])
+    for item in forecast[1:]:
+        writer.writerow([
+            school_id, school_name(school_id), "forecast", item["horizon"], item["pm25"],
+            "", "", "", "", risk, item.get("simulated", True), reading.get("timestamp", ""),
+        ])
+    return output.getvalue().encode("utf-8")
+
+
 initialize_state()
+school_ids = list(SCHOOL_BY_ID) or [DEFAULT_SCHOOL_ID]
+selected_school = st.sidebar.selectbox(
+    "School context",
+    school_ids,
+    index=school_ids.index(st.session_state["school_id"]) if st.session_state["school_id"] in school_ids else 0,
+    format_func=school_name,
+)
+if selected_school != st.session_state["school_id"]:
+    st.session_state["school_id"] = selected_school
+    st.session_state["health"] = None
+    st.session_state["reading"] = None
+    st.session_state["risk"] = None
+    st.session_state["alert"] = None
+    st.session_state["audit"] = []
+    st.rerun()
 
-st.title("🌬️ Smart Breath")
-st.subheader("School & Child Safe Air Early-Warning System")
-if DEMO_MODE == "public":
-    st.caption("PUBLIC SIMULATED DEMO  •  No backend or credentials required")
-else:
-    st.caption(f"LOCAL DEMO  •  {SCHOOL_ID} school context  •  Backend: {BACKEND_URL}")
+st.sidebar.caption("Public mode is simulated and backend-free." if DEMO_MODE == "public"
+                   else f"Local backend: {BACKEND_URL}")
+if st.sidebar.button("Refresh dashboard"):
+    if DEMO_MODE == "public":
+        st.session_state["health"] = None
+        initialize_state()
+    else:
+        load_local_state(st.session_state["school_id"])
+    st.rerun()
 
-if DEMO_MODE == "public":
-    st.info("Public demo mode • all readings, alerts, audit events, and notifications are simulated.")
-elif st.session_state["backend_error"]:
-    st.error(
-        "Backend unavailable. Start the existing backend with "
-        "`npm start` from the project root, then use Refresh."
-    )
-    st.code(st.session_state["backend_error"])
-else:
-    st.success("Backend connected • local authenticated demo mode")
-
-reading = st.session_state.get("reading")
+school_id = st.session_state["school_id"]
+school = SCHOOL_BY_ID.get(school_id, {})
+reading = st.session_state.get("reading") or scenario_reading(school_id, st.session_state["scenario"])
 risk = st.session_state.get("risk")
 alert = st.session_state.get("alert")
 current_risk = risk_label(risk, reading)
 
-st.divider()
-st.header("Current environmental conditions")
+st.title("🌬️ Smart Breath")
+st.subheader("School & Child Safe Air Early-Warning System")
+st.caption(f"{'PUBLIC SIMULATED DEMO' if DEMO_MODE == 'public' else 'LOCAL BACKEND DEMO'}  •  {school_name(school_id)}")
+if DEMO_MODE == "public":
+    st.info("SIMULATED DEMO • Readings, forecasts, alerts, audit events, and LOCAL_MOCK notifications are presentation data.")
+elif st.session_state["backend_error"]:
+    st.error("Backend unavailable. Start the existing backend, then refresh.")
+    st.code(st.session_state["backend_error"])
+else:
+    st.success("Backend connected • local authenticated demo mode")
+
+st.header("Current Air Quality")
+st.caption(f"School: **{school_name(school_id)}**  •  Simulation status: **SIMULATED DEMO**")
 metric_columns = st.columns(5)
-metrics = [
-    ("PM2.5", metric_value(reading, "pm25"), "µg/m³"),
-    ("PM10", metric_value(reading, "pm10"), "µg/m³"),
-    ("Temperature", metric_value(reading, "temperature"), "°C"),
-    ("Humidity", metric_value(reading, "humidity"), "%"),
-    ("Wind", metric_value(reading, "windSpeed"), "m/s"),
-]
-for column, (label, value, unit) in zip(metric_columns, metrics):
+for column, (label, key, unit) in zip(
+    metric_columns,
+    (("PM2.5", "pm25", "µg/m³"), ("PM10", "pm10", "µg/m³"),
+     ("Temperature", "temperature", "°C"), ("Humidity", "humidity", "%"),
+     ("Wind speed", "windSpeed", "m/s")),
+):
     with column:
-        st.metric(label, f"{value} {unit}" if value != "—" else value)
+        st.metric(label, f"{reading.get(key, '—')} {unit}")
+st.markdown(f"### {RISK_COLORS.get(current_risk, '⚪')} Current risk: {current_risk}")
+st.caption(f"Last updated: {reading.get('timestamp', 'not available')}")
 
-risk_colors = {
-    "NORMAL": "🟢",
-    "ELEVATED": "🟡",
-    "HIGH": "🟠",
-    "CRITICAL": "🔴",
-}
-st.markdown(f"### Current risk: {risk_colors.get(current_risk, '⚪')} {current_risk}")
-if risk and risk.get("reason"):
-    st.info(risk["reason"])
-
-demo_column, refresh_column = st.columns([3, 1])
-with demo_column:
-    if st.button(
-        "Run Severe Air Quality Demo",
-        type="primary",
-        use_container_width=True,
-        disabled=DEMO_MODE == "local" and bool(st.session_state["backend_error"]),
-    ):
-        run_demo()
-with refresh_column:
-    if st.button("Refresh", use_container_width=True):
-        load_backend_state()
-        st.rerun()
-
+st.header("Demo Sensor Simulator")
+st.caption("SIMULATED DEMO • This control is not a real sensor.")
+scenario_columns = st.columns(4)
+for column, level in zip(scenario_columns, RISK_LEVELS):
+    with column:
+        if st.button(level, use_container_width=True, key=f"scenario-{level}"):
+            if level == "CRITICAL":
+                run_critical_demo()
+            else:
+                apply_simulated_scenario(level)
+            st.rerun()
+if st.button("Run Severe Air Quality Demo", type="primary", use_container_width=True):
+    run_critical_demo()
+    st.rerun()
 if st.session_state["demo_error"]:
     st.error(f"Demo request failed: {st.session_state['demo_error']}")
-if st.session_state.get("demo_response"):
-    with st.expander("Actual backend demo response"):
-        st.json(st.session_state["demo_response"])
+
+st.header("3-Hour PM2.5 Forecast")
+forecast = st.session_state.get("forecast") or forecast_for(current_risk, reading.get("pm25", 0))
+st.caption("SIMULATED DEMO • Forecast values are deterministic presentation data; no deployed ML accuracy is claimed.")
+forecast_columns = st.columns(4)
+for column, item in zip(forecast_columns, forecast):
+    with column:
+        st.metric(item["horizon"], f"{item['pm25']} µg/m³")
+
+st.header("Air Quality Trends")
+chart_rows = [{"PM2.5": item["pm25"], "PM10": reading.get("pm10", 0) if item["horizon"] == "Current"
+               else round(reading.get("pm10", 0) * item["pm25"] / max(reading.get("pm25", 1), 1)),
+               "Predicted PM2.5": item["pm25"]} for item in forecast]
+st.caption("SIMULATED DEMO • Trend history and predicted values are not real sensor measurements.")
+st.line_chart(chart_rows, x=None, y=["PM2.5", "PM10", "Predicted PM2.5"])
+
+st.header("Air Quality Risk Assessment")
+risk_column, summary_column = st.columns([1, 2])
+with risk_column:
+    st.metric("Current risk", f"{RISK_COLORS.get(current_risk, '⚪')} {current_risk}")
+    st.write(f"Child-sensitive monitoring: **{'ACTIVE' if school.get('protectiveActions', {}).get('childSensitiveMode', True) else 'CONFIGURED'}**")
+with summary_column:
+    st.write(f"Forecast trend: **{forecast[0]['pm25']} → {forecast[-1]['pm25']} µg/m³** over 3 hours")
+    st.write((risk or {}).get("reason", "Monitoring state is based on the selected simulated scenario."))
+    st.markdown("**Recommended protective actions**")
+    for item in st.session_state.get("recommendations", SIMULATED_RECOMMENDATIONS):
+        st.write(f"- **{item.get('priority', 'Action')}** — {item.get('title', '')}")
+        if item.get("detail"):
+            st.caption(item["detail"])
 
 if alert:
-    st.divider()
-    st.header("Critical alert center")
-    st.warning(f"Alert status: **{alert.get('status', 'UNKNOWN')}**")
-    st.write(alert.get("message", "No alert message returned."))
-    st.caption("Notification delivery: **SIMULATED** (LOCAL_MOCK)")
-    recommendations = alert.get("recommendedActions", [])
-    if recommendations:
-        st.markdown("**Protective recommendations**")
-        for recommendation in recommendations:
-            st.markdown(f"- {recommendation}")
-    lifecycle = [
-        "CREATED",
-        "QUEUED",
-        "DELIVERY_ATTEMPTED",
-        "DELIVERED",
-        "ACKNOWLEDGED",
-    ]
-    current_status = alert.get("status", "")
-    current_index = lifecycle.index(current_status) if current_status in lifecycle else -1
-    st.markdown("**Alert lifecycle**")
-    st.write(" → ".join(
-        f"**{item}**" if index <= current_index else item
-        for index, item in enumerate(lifecycle)
-    ))
-    if current_status == "DELIVERED":
-        if st.button("Acknowledge alert"):
-            acknowledge_alert()
+    st.header("Operational Alert Center")
+    st.warning(f"{RISK_COLORS['CRITICAL']} Severity: **{alert.get('severity', '').upper()}** • Status: **{alert.get('status', '')}**")
+    st.write(alert.get("message", ""))
+    alert_columns = st.columns(3)
+    alert_columns[0].metric("PM2.5", f"{alert.get('currentValue', '—')} µg/m³")
+    alert_columns[1].metric("Notification", "SIMULATED")
+    alert_columns[2].metric("Acknowledgement", "YES" if alert.get("status") == "ACKNOWLEDGED" else "PENDING")
+    st.caption(f"LOCAL_MOCK notification • Created: {alert.get('createdAt', 'not available')}")
+    lifecycle = ["CREATED", "QUEUED", "DELIVERY_ATTEMPTED", "DELIVERED", "ACKNOWLEDGED"]
+    current_index = lifecycle.index(alert["status"]) if alert.get("status") in lifecycle else -1
+    st.write(" → ".join(f"**{item}**" if index <= current_index else item for index, item in enumerate(lifecycle)))
+    if alert.get("status") == "DELIVERED" and st.button("Acknowledge alert"):
+        acknowledge_alert()
+        st.rerun()
     if st.session_state["ack_error"]:
         st.error(f"Acknowledgement failed: {st.session_state['ack_error']}")
 
-st.divider()
-left, right = st.columns(2)
-with left:
-    st.header("Audit and events")
-    audit_events = st.session_state.get("audit", [])
-    if audit_events:
-        for event in reversed(audit_events[-10:]):
-            timestamp = event.get("timestamp", "")
-            label = event.get("eventType", "event").replace(".", " ").title()
-            st.write(f"**{label}** — {timestamp}")
-    else:
-        st.caption("No local audit events yet. Run the demo to create one.")
-with right:
-    st.header("Recommendations")
-    for recommendation in st.session_state.get("recommendations", []):
-        st.write(f"**{recommendation.get('priority', 'Info')}** — {recommendation.get('title', '')}")
-        st.caption(recommendation.get("detail", ""))
+st.header("Audit Timeline")
+audit_events = st.session_state.get("audit", [])
+if audit_events:
+    for event in reversed(audit_events[-10:]):
+        st.write(f"**{event.get('eventType', 'event')}**  •  {event.get('timestamp', '')}  •  {'SIMULATED' if event.get('simulated', True) else 'LOCAL'}")
+else:
+    st.caption("No alert lifecycle events yet. Select a simulator state or run the critical demo.")
+
+st.header("Reports")
+st.download_button(
+    "Download Air Quality Report",
+    data=report_csv(reading, forecast, school_id),
+    file_name=f"smartbreath-{school_id}-air-quality.csv",
+    mime="text/csv",
+)
+if st.session_state.get("demo_response"):
+    with st.expander("Actual demo response"):
+        st.json(st.session_state["demo_response"])
 
 st.divider()
 st.info(
-    "Safety notice: this interface uses simulated demo data and simulated "
-    "notifications. It is not a medical diagnostic system and does not "
-    "autonomously dispatch police, ambulance, or other emergency services."
+    "Safety notice: this dashboard uses simulated demo data and LOCAL_MOCK notifications. "
+    "It is not a medical diagnostic system, does not provide treatment advice, and "
+    "does not autonomously dispatch police, ambulance, hospitals, or emergency services."
 )
-st.caption(f"Last viewed: {datetime.now().astimezone().isoformat(timespec='seconds')}")

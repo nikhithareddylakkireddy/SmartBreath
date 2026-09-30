@@ -14,6 +14,13 @@ The app has two explicit modes:
   `http://localhost:3000` and the real
   `POST /api/schools/greenfield/demo/severe-pm25` endpoint.
 
+The dashboard includes the configured school selector, current air-quality
+metrics, deterministic three-hour simulated forecast, clearly labeled trend
+charts, child-sensitive risk summary, protective actions, sensor scenario
+buttons, operational alert lifecycle, audit timeline, and a CSV report
+download. These are presentation features over the existing contracts; the
+Streamlit app does not replace the backend risk engine.
+
 ## Start locally
 
 From the repository root:
@@ -65,6 +72,12 @@ backend is intentionally provided. The public app has no dependency on
    simulated notification, protective recommendations, and the alert lifecycle.
 4. Review the audit events.
 5. Acknowledge the delivered alert when demonstrating the lifecycle.
+
+The **Demo Sensor Simulator** has NORMAL, ELEVATED, HIGH, and CRITICAL
+controls. CRITICAL uses the existing deterministic PM2.5 `285` scenario.
+All simulator readings and forecast/chart values are labeled `SIMULATED DEMO`.
+Use **Download Air Quality Report** to export the currently displayed reading
+and forecast rows; exported rows include a `simulated` marker.
 
 In local mode, the demo uses the existing `POST
 /api/schools/greenfield/demo/severe-pm25` endpoint. In public mode, the button
